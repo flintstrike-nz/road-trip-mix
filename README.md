@@ -89,8 +89,10 @@ The Android app is a [Capacitor](https://capacitorjs.com) shell around the deplo
 Build it yourself (needs JDK 21 and the Android SDK; set `ANDROID_HOME`):
 
 ```bash
-CAP_SERVER_URL=https://your-deployment.example npm run android:build
-# APK: android/app/build/outputs/apk/debug/app-debug.apk
+CAP_SERVER_URL=https://your-deployment.example npm run android:build     # debug APK
+# -> android/app/build/outputs/apk/debug/app-debug.apk
+CAP_SERVER_URL=https://your-deployment.example npm run android:release   # release APK (see "Releases" for signing)
+# -> android/app/build/outputs/apk/release/app-release.apk
 ```
 
 `npm run android:sync` builds the joiner page and runs `cap sync`; open the `android/` folder in Android Studio to run on a device. The first Gradle build downloads the Spotify App Remote AAR from Spotify's GitHub release into `android/app/libs/` (git-ignored). Run the native relay's tests with `cd android && ./gradlew :app:testDebugUnitTest`.
@@ -109,7 +111,7 @@ On a phone, open that link, open the downloaded file, and allow installs from yo
 scripts/android-keystore.sh --set-github-secrets flintstrike-nz/road-trip-mix
 ```
 
-That creates the key in `~/.road-trip-mix/` (needs a JDK; **back that folder up**, since losing the key means everyone must uninstall and reinstall), prints its SHA-1 — register it in the Spotify dashboard's Android settings — and stores it as the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (using the GitHub CLI; without it, the script prints what to add by hand). Re-running it reuses the existing key. To sign a local build with the same key: `set -a; . ~/.road-trip-mix/rtm-signing.env; set +a; npm run android:build`.
+That creates the key in `~/.road-trip-mix/` (needs a JDK; **back that folder up**, since losing the key means everyone must uninstall and reinstall), prints its SHA-1 — register it in the Spotify dashboard's Android settings — and stores it as the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (using the GitHub CLI; without it, the script prints what to add by hand). Re-running it reuses the existing key. To sign a local build with the same key, build the *release* variant (the debug one always uses the debug key): `set -a; . ~/.road-trip-mix/rtm-signing.env; set +a; npm run android:release`.
 
 The APK wraps the production site (`https://road-trip-mix.vercel.app`); set the `CAP_SERVER_URL` repository variable to point releases somewhere else. `versionCode` is the workflow run number, so it rises with every build.
 

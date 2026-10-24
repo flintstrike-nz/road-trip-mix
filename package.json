@@ -11,7 +11,8 @@
     "build:jam-client": "node scripts/build-jam-client.mjs",
     "jam-relay": "npm run build:jam-client && tsx scripts/jam-relay.ts",
     "android:sync": "npm run build:jam-client && cap sync android",
-    "android:build": "npm run android:sync && cd android && ./gradlew assembleDebug"
+    "android:build": "npm run android:sync && cd android && ./gradlew assembleDebug",
+    "android:release": "npm run android:sync && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.3",

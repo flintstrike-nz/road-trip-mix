@@ -7,10 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# One release at a time and in merge order, so "latest" is always the newest merge.
-concurrency:
-  group: android-release
-  cancel-in-progress: false
+# Deliberately no `concurrency` group: GitHub keeps only one *pending* run per group, so a third merge
+# would silently replace the second and that merge would never get a release. Builds are independent
+# and may finish out of order, so the publish step makes "latest" follow the highest build number
+# instead of whichever run finished last.
 
 permissions:
   contents: write # create the release and its tag
@@ -117,11 +117,21 @@ jobs:
             gh release upload "$TAG" dist/*.apk --clobber
             gh release edit "$TAG" --notes-file notes.md
           else
+            # Never claim "latest" here: this build may not be the newest (see the note at the top).
             gh release create "$TAG" dist/*.apk \
               --target "$GITHUB_SHA" \
               --title "Road Trip Mix ${VERSION_NAME}" \
               --notes-file notes.md \
-              --latest
+              --latest=false
+          fi
+
+          # "Latest" always means the highest build number that exists, whatever order builds finish in
+          # (or if an old run is re-run): releases/latest/download/road-trip-mix.apk never goes backwards.
+          NEWEST="$(gh release list --limit 100 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^v[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\)$/\1 &/p' \
+            | sort -n | tail -1 | cut -d' ' -f2)"
+          if [ -n "$NEWEST" ]; then
+            gh release edit "$NEWEST" --latest
           fi
 
       - name: Summary
