@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Road Trip Mix</string>
+    <string name="title_activity_main">Road Trip Mix</string>
+    <string name="package_name">com.roadtripmix.app</string>
+    <string name="custom_url_scheme">com.roadtripmix.app</string>
+</resources>

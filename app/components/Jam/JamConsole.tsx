@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { getHistoryStore } from "@/lib/history";
 import { JamController } from "@/lib/jam/controller";
-import { CapacitorHostTransport, isNativeApp, nativePlayer } from "@/lib/jam/native";
+import { CapacitorHostTransport, SpotifyRemote, isNativeApp, nativePlayer } from "@/lib/jam/native";
 import { player, searchTracks } from "@/lib/jam/spotify-backend";
 import { loadJam, saveJam } from "@/lib/jam/storage";
 import { WebSocketHostTransport, type HostTransport, type TransportInfo } from "@/lib/jam/transport";
@@ -35,6 +35,7 @@ export default function JamConsole({ id }: { id: string }) {
   const [results, setResults] = useState<TrackMeta[]>([]);
   const [searching, setSearching] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [remoteState, setRemoteState] = useState<"idle" | "connecting" | "connected">("idle");
   const controllerRef = useRef<JamController | null>(null);
   const tokens = useMemo(() => sessionTokenSource(), []);
   const authed = !!session?.accessToken;
@@ -207,6 +208,29 @@ export default function JamConsole({ id }: { id: string }) {
           <button className="jam__btn jam__btn--ghost" onClick={() => guard(() => player.next(tokens))}>
             Skip ⏭
           </button>
+          {isNativeApp() && process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID && (
+            <button
+              className="jam__btn jam__btn--ghost"
+              disabled={remoteState !== "idle"}
+              onClick={() =>
+                guard(async () => {
+                  setRemoteState("connecting");
+                  try {
+                    await SpotifyRemote.connect({
+                      clientId: process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID!,
+                      redirectUri: "roadtripmix://spotify-callback",
+                    });
+                    setRemoteState("connected");
+                  } catch (e) {
+                    setRemoteState("idle");
+                    throw e;
+                  }
+                })
+              }
+            >
+              {remoteState === "connected" ? "Spotify app connected ✓" : remoteState === "connecting" ? "Connecting…" : "Connect Spotify app"}
+            </button>
+          )}
         </div>
         {actionError && <p className="jam__error">{actionError}</p>}
         {!isNativeApp() && <WebPlayer tokens={tokens} />}

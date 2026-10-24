@@ -36,7 +36,7 @@ export type TrackMeta = {
 };
 
 export type Member = {
-  id: string; // stable per device (generated on the joiner, persisted locally)
+  id: string; // public identity, safe to broadcast; NOT a credential (see JamState.devices)
   name: string;
   color: string;
   isHost: boolean;
@@ -77,7 +77,11 @@ export type JamState = {
   settings: JamSettings;
   memberOrder: string[]; // rotation order; hosts can reorder
   members: Record<string, Member>;
-  banned: string[]; // device ids removed by the host
+  // Secret per-device tokens (generated on the joiner, kept in its localStorage) mapped to the
+  // member they belong to. Never included in PublicJamState: knowing a member id must not let
+  // you act as that member.
+  devices: Record<string, string>;
+  banned: string[]; // device tokens removed by the host
   queues: Record<string, QueueEntry[]>; // per-member personal queue, in the order the member wants them played
   // Last round each member had a song locked in (played or playing); -1 = never.
   lastRound: Record<string, number>;

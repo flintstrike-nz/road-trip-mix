@@ -30,11 +30,15 @@ export function makeHost(opts: { base?: TrackMeta[]; search?: HostDeps["search"]
     close: (c) => closed.push(c),
     onChange: (s) => changes.push(s),
   };
-  const state = createJamState({ name: "Trip", hostName: "Host", hostDeviceId: "host", base: opts.base }, deps);
+  const state = createJamState({ name: "Trip", hostName: "Host", hostMemberId: "host", base: opts.base }, deps);
   const host = new JamHost(state, deps);
-  const join = (clientId: string, deviceId: string, name: string) =>
+  // Joins as a device and returns the (public) member id the host assigned.
+  const join = (clientId: string, deviceId: string, name: string): string => {
     host.handleRaw(clientId, JSON.stringify({ t: "hello", deviceId, name, code: state.settings.joinCode }));
-  const queueIds = (m: string) => host.getState().queues[m].map((e) => e.track.name);
+    const welcome = sent.filter((s) => s.to === clientId && s.msg.t === "welcome").at(-1)?.msg;
+    return welcome && welcome.t === "welcome" ? welcome.memberId : "";
+  };
+  const queueIds = (m: string) => (host.getState().queues[m] ?? []).map((e) => e.track.name);
   const order = () => host.upcoming().map((u) => u.track.name);
   const advance = (ms: number) => { t += ms; };
   return { host, advance, sent, broadcasts, closed, changes, join, queueIds, order, state, deps };

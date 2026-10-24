@@ -55,7 +55,7 @@ export function randomJoinCode(len = 4): string {
 export type CreateJamOptions = {
   name: string;
   hostName: string;
-  hostDeviceId?: string;
+  hostMemberId?: string;
   base?: TrackMeta[];
   targetPlaylistId?: string;
   groupedPlaylistId?: string;
@@ -63,7 +63,7 @@ export type CreateJamOptions = {
 };
 
 export function createJamState(opts: CreateJamOptions, deps: Pick<HostDeps, "now" | "genId"> = { now: Date.now, genId: randomId }): JamState {
-  const hostMemberId = opts.hostDeviceId ?? deps.genId();
+  const hostMemberId = opts.hostMemberId ?? deps.genId();
   const host: Member = {
     id: hostMemberId,
     name: opts.hostName,
@@ -86,6 +86,7 @@ export function createJamState(opts: CreateJamOptions, deps: Pick<HostDeps, "now
     },
     memberOrder: [hostMemberId],
     members: { [hostMemberId]: host },
+    devices: {},
     banned: [],
     queues: { [hostMemberId]: [] },
     lastRound: { [hostMemberId]: -1 },
@@ -127,6 +128,9 @@ export class JamHost {
     // A restored session starts with everyone offline until they reconnect.
     this.state = {
       ...state,
+      devices: state.devices ?? {},
+      banned: state.banned ?? [],
+      playlistLocked: state.playlistLocked ?? 0,
       members: Object.fromEntries(
         Object.entries(state.members).map(([id, m]) => [id, { ...m, online: m.isHost }])
       ),
@@ -206,33 +210,40 @@ export class JamHost {
     }
   }
 
-  private join(clientId: string, deviceId: string, name: string, code: string): ActionResult {
+  private join(clientId: string, deviceToken: string, name: string, code: string): ActionResult {
     if (code.toUpperCase() !== this.state.settings.joinCode) {
       return fail("bad-code", "That join code isn't right.");
     }
-    if (this.state.banned.includes(deviceId)) {
+    if (this.state.banned.includes(deviceToken)) {
       return fail("banned", "You've been removed from this session.");
     }
-    const existing = this.state.members[deviceId];
-    this.clientToMember.set(clientId, deviceId);
+    // The device token is the credential; the member id it maps to is public.
+    let memberId = this.state.devices[deviceToken];
+    if (memberId && !this.state.members[memberId]) memberId = ""; // stale mapping
+    const existing = memberId ? this.state.members[memberId] : undefined;
+    if (!memberId) memberId = this.deps.genId();
+    const id = memberId;
+
+    this.clientToMember.set(clientId, id);
     this.mutate((s) => {
+      s.devices = { ...s.devices, [deviceToken]: id };
       if (existing) {
-        s.members[deviceId] = { ...existing, name: this.uniqueName(name, deviceId), online: true };
+        s.members[id] = { ...existing, name: this.uniqueName(name, id), online: true };
         return;
       }
-      s.members[deviceId] = {
-        id: deviceId,
-        name: this.uniqueName(name, deviceId),
+      s.members[id] = {
+        id,
+        name: this.uniqueName(name, id),
         color: MEMBER_COLORS[s.memberOrder.length % MEMBER_COLORS.length],
         isHost: false,
         joinedAt: this.deps.now(),
         online: true,
       };
-      s.memberOrder = [...s.memberOrder, deviceId];
-      s.queues[deviceId] = [];
-      s.lastRound[deviceId] = -1;
+      s.memberOrder = [...s.memberOrder, id];
+      s.queues[id] = [];
+      s.lastRound[id] = -1;
     }, false);
-    this.deps.send(clientId, { t: "welcome", memberId: deviceId, state: this.publicState() });
+    this.deps.send(clientId, { t: "welcome", memberId: id, state: this.publicState() });
     this.emit();
     return { ok: true };
   }
@@ -339,7 +350,9 @@ export class JamHost {
       this.clientToMember.delete(clientId);
     }
     this.mutate((st) => {
-      st.banned = [...st.banned, memberId];
+      const tokens = Object.keys(st.devices).filter((t) => st.devices[t] === memberId);
+      st.banned = [...st.banned, ...tokens];
+      st.devices = Object.fromEntries(Object.entries(st.devices).filter(([, m]) => m !== memberId));
       delete st.members[memberId];
       delete st.queues[memberId];
       delete st.lastRound[memberId];
@@ -440,6 +453,7 @@ export class JamHost {
       members: { ...this.state.members },
       queues: { ...this.state.queues },
       lastRound: { ...this.state.lastRound },
+      devices: { ...this.state.devices },
     };
     fn(draft);
     draft.rev = this.state.rev + 1;

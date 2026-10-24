@@ -27,6 +27,12 @@ export default function JoinPanel({ info, code }: { info: TransportInfo; code: s
 
   return (
     <div className="jam__join">
+      {info.hotspotError && (
+        <p className="jam__error" style={{ width: "100%" }}>
+          No jam hotspot: {info.hotspotError} Connect every device to the same Wi-Fi or your phone&apos;s own hotspot
+          instead — the link below still works.
+        </p>
+      )}
       {info.hotspot && (
         <div className="jam__join-step">
           <p className="jam__step-label">1 · Join the Wi-Fi</p>

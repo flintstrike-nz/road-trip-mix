@@ -64,6 +64,10 @@ class Joiner {
       await new Promise((r) => setTimeout(r, 10));
     }
   }
+  memberId(): string {
+    const w = this.msgs.find((m) => m.t === "welcome");
+    return w && w.t === "welcome" ? w.memberId : "";
+  }
   latest(): PublicJamState | undefined {
     const states = this.msgs.flatMap((m) => (m.t === "state" || m.t === "welcome" ? [m.state] : []));
     return states.sort((a, b) => a.rev - b.rev).at(-1);
@@ -71,7 +75,7 @@ class Joiner {
 }
 
 async function startHost(opts: { target?: string; base?: ReturnType<typeof track>[]; readPlayback?: () => Promise<PlaybackSnapshot | null> } = {}) {
-  const state = createJamState({ name: "Trip", hostName: "Dad", hostDeviceId: "dad", base: opts.base, targetPlaylistId: opts.target });
+  const state = createJamState({ name: "Trip", hostName: "Dad", hostMemberId: "dad", base: opts.base, targetPlaylistId: opts.target });
   const history = new MemoryHistoryStore();
   const controller = new JamController({
     state,
@@ -142,11 +146,11 @@ describe("jam session over the relay", () => {
     const bob = new Joiner(relay.port);
     await Promise.all([ann.ready(), bob.ready()]);
 
-    ann.send({ t: "hello", deviceId: "ann", name: "Ann", code: "WRONG" });
+    ann.send({ t: "hello", deviceId: "ann-dev", name: "Ann", code: "WRONG" });
     expect(await ann.until((m) => (m.t === "error" ? m.code : undefined))).toBe("bad-code");
 
-    ann.send({ t: "hello", deviceId: "ann", name: "Ann", code: state.settings.joinCode });
-    bob.send({ t: "hello", deviceId: "bob", name: "Bob", code: state.settings.joinCode });
+    ann.send({ t: "hello", deviceId: "ann-dev", name: "Ann", code: state.settings.joinCode });
+    bob.send({ t: "hello", deviceId: "bob-dev", name: "Bob", code: state.settings.joinCode });
     await ann.until((m) => (m.t === "welcome" ? true : undefined));
     await bob.until((m) => (m.t === "welcome" ? true : undefined));
 
@@ -162,7 +166,7 @@ describe("jam session over the relay", () => {
     expect(names(ann.latest())).toEqual(names(bob.latest()));
 
     // reorder own queue in real time
-    const a2 = ann.latest()!.queues.ann[1].id;
+    const a2 = ann.latest()!.queues[ann.memberId()][1].id;
     ann.send({ t: "move", entryId: a2, toIndex: 0 });
     await bob.until((m) => (m.t === "state" && m.state.upcoming[1]?.track.name === "Song a2" ? true : undefined));
     expect(names(bob.latest())).toEqual(["Song d1", "Song a2", "Song b1", "Song a1"]);
@@ -181,7 +185,7 @@ describe("jam session over the relay", () => {
     const { controller, state } = await startHost();
     const ann = new Joiner(relay.port);
     await ann.ready();
-    ann.send({ t: "hello", deviceId: "ann", name: "Ann", code: state.settings.joinCode });
+    ann.send({ t: "hello", deviceId: "ann-dev", name: "Ann", code: state.settings.joinCode });
     await ann.until((m) => (m.t === "welcome" ? true : undefined));
     await controller.stop();
     await vi.waitFor(() => expect(ann.closed).toBe(true));
@@ -191,12 +195,12 @@ describe("jam session over the relay", () => {
     const { controller, state } = await startHost();
     const ann = new Joiner(relay.port);
     await ann.ready();
-    ann.send({ t: "hello", deviceId: "ann", name: "Ann", code: state.settings.joinCode });
+    ann.send({ t: "hello", deviceId: "ann-dev", name: "Ann", code: state.settings.joinCode });
     await ann.until((m) => (m.t === "welcome" ? true : undefined));
-    controller.host.kick("dad", "ann");
+    controller.host.kick("dad", ann.memberId());
     await ann.until((m) => (m.t === "kicked" ? true : undefined));
     await vi.waitFor(() => expect(ann.closed).toBe(true));
-    expect(controller.host.getState().members.ann).toBeUndefined();
+    expect(controller.host.getState().members[ann.memberId()]).toBeUndefined();
   });
 });
 
@@ -239,7 +243,7 @@ describe("live Spotify sync and history", () => {
 
     const ann = new Joiner(relay.port);
     await ann.ready();
-    ann.send({ t: "hello", deviceId: "ann", name: "Ann", code: state.settings.joinCode });
+    ann.send({ t: "hello", deviceId: "ann-dev", name: "Ann", code: state.settings.joinCode });
     await ann.until((m) => (m.t === "welcome" ? true : undefined));
 
     ann.send({ t: "add", track: track("a1") });
@@ -248,7 +252,7 @@ describe("live Spotify sync and history", () => {
     ann.send({ t: "add", track: track("a2") });
     await vi.waitFor(() => expect(sp.pl.uris).toEqual([uri("p1"), uri("p2"), uri("a1"), uri("a2"), uri("f1"), uri("f2")]));
 
-    const a2 = ann.latest()!.queues.ann[1].id;
+    const a2 = ann.latest()!.queues[ann.memberId()][1].id;
     ann.send({ t: "move", entryId: a2, toIndex: 0 });
     await vi.waitFor(() => expect(sp.pl.uris).toEqual([uri("p1"), uri("p2"), uri("a2"), uri("a1"), uri("f1"), uri("f2")]));
 
@@ -260,7 +264,7 @@ describe("live Spotify sync and history", () => {
     await vi.waitFor(async () => expect((await history.list()).some((r) => r.track.id === track("a1").id)).toBe(true));
     const rec = (await history.list()).find((r) => r.track.id === track("a1").id)!;
     expect(rec).toMatchObject({ source: "jam", addedBy: { name: "Ann" }, jamName: "Trip", deviceName: "Phone" });
-    expect(controller.host.getState().queues.ann).toHaveLength(0);
+    expect(controller.host.getState().queues[ann.memberId()]).toHaveLength(0);
     expect(controller.host.getState().playlistLocked).toBe(3);
     // never rewrote the played prefix with a full replace
     expect(sp.calls).not.toContain("PUT");

@@ -4,34 +4,34 @@ import { track, makeHost } from "./test-utils";
 describe("round-robin schedule", () => {
   it("interleaves one song per member per round", () => {
     const { host, join, order } = makeHost();
-    join("c1", "ann", "Ann");
-    join("c2", "bob", "Bob");
+    const ann = join("c1", "ann-dev", "Ann");
+    const bob = join("c2", "bob-dev", "Bob");
     host.addTrack("host", track("h1"));
     host.addTrack("host", track("h2"));
-    host.addTrack("ann", track("a1"));
-    host.addTrack("ann", track("a2"));
-    host.addTrack("bob", track("b1"));
+    host.addTrack(ann, track("a1"));
+    host.addTrack(ann, track("a2"));
+    host.addTrack(bob, track("b1"));
     expect(order()).toEqual(["Song h1", "Song a1", "Song b1", "Song h2", "Song a2"]);
   });
 
   it("skips members with nothing queued for a round", () => {
     const { host, join, order } = makeHost();
-    join("c1", "ann", "Ann");
-    join("c2", "bob", "Bob");
-    host.addTrack("ann", track("a1"));
-    host.addTrack("ann", track("a2"));
-    host.addTrack("bob", track("b1"));
+    const ann = join("c1", "ann-dev", "Ann");
+    const bob = join("c2", "bob-dev", "Bob");
+    host.addTrack(ann, track("a1"));
+    host.addTrack(ann, track("a2"));
+    host.addTrack(bob, track("b1"));
     expect(order()).toEqual(["Song a1", "Song b1", "Song a2"]);
   });
 
   it("puts a late add in the current round if the member's turn is still ahead", () => {
     const { host, join, order } = makeHost();
-    join("c1", "ann", "Ann");
-    join("c2", "bob", "Bob");
+    const ann = join("c1", "ann-dev", "Ann");
+    const bob = join("c2", "bob-dev", "Bob");
     host.addTrack("host", track("h1"));
-    host.addTrack("ann", track("a1"));
+    host.addTrack(ann, track("a1"));
     host.trackStarted(track("h1")); // host's turn in round 0 is playing
-    host.addTrack("bob", track("b1")); // bob hasn't had round 0 yet
+    host.addTrack(bob, track("b1")); // bob hasn't had round 0 yet
     expect(order()).toEqual(["Song a1", "Song b1"]);
     host.addTrack("host", track("h2")); // host already had round 0 → round 1
     expect(order()).toEqual(["Song a1", "Song b1", "Song h2"]);
@@ -39,24 +39,24 @@ describe("round-robin schedule", () => {
 
   it("does not let a member jump ahead of someone whose turn is next", () => {
     const { host, join, order } = makeHost();
-    join("c1", "ann", "Ann");
+    const ann = join("c1", "ann-dev", "Ann");
     host.addTrack("host", track("h1"));
     host.addTrack("host", track("h2"));
-    host.addTrack("ann", track("a1"));
+    host.addTrack(ann, track("a1"));
     host.trackStarted(track("h1"));
     host.trackStarted(track("a1")); // round 0 done; h2 is round 1
-    host.addTrack("ann", track("a2")); // ann played in round 0 → round 1, after host
+    host.addTrack(ann, track("a2")); // ann played in round 0 → round 1, after host
     expect(order()).toEqual(["Song h2", "Song a2"]);
   });
 
   it("reordering a personal queue changes which song gets the next slot", () => {
     const { host, join, order } = makeHost();
-    join("c1", "ann", "Ann");
-    host.addTrack("ann", track("a1"));
-    const second = host.addTrack("ann", track("a2"));
+    const ann = join("c1", "ann-dev", "Ann");
+    host.addTrack(ann, track("a1"));
+    const second = host.addTrack(ann, track("a2"));
     host.addTrack("host", track("h1"));
     expect(order()).toEqual(["Song h1", "Song a1", "Song a2"]);
-    if (second.ok) host.moveEntry("ann", second.entryId!, 0);
+    if (second.ok) host.moveEntry(ann, second.entryId!, 0);
     expect(order()).toEqual(["Song h1", "Song a2", "Song a1"]);
   });
 
@@ -68,10 +68,10 @@ describe("round-robin schedule", () => {
 
   it("locks a song in when it starts and removes it from the queue", () => {
     const { host, join, order, queueIds } = makeHost({ base: [track("f1")] });
-    join("c1", "ann", "Ann");
-    host.addTrack("ann", track("a1"));
+    const ann = join("c1", "ann-dev", "Ann");
+    host.addTrack(ann, track("a1"));
     host.trackStarted(track("a1"));
-    expect(queueIds("ann")).toEqual([]);
+    expect(queueIds(ann)).toEqual([]);
     expect(host.getState().nowPlaying?.track.name).toBe("Song a1");
     host.trackStarted(track("f1"));
     expect(order()).toEqual([]);

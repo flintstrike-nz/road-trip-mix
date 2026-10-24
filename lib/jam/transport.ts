@@ -10,6 +10,8 @@ export type TransportInfo = {
   port: number;
   urls: string[]; // base URLs joiners can open, e.g. http://192.168.43.1:8787
   hotspot?: HotspotInfo | null;
+  // Set when a hotspot was requested but Android couldn't start one.
+  hotspotError?: string;
 };
 
 export type TransportEvent = Exclude<RelayToHost, { type: "ready" }>;
