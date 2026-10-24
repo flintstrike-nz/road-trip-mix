@@ -81,6 +81,7 @@ export type CreateJamOptions = {
   base?: TrackMeta[];
   targetPlaylistId?: string;
   groupedPlaylistId?: string;
+  playlistLocked?: number; // leading playlist items already played/playing (don't rewrite)
   settings?: Partial<JamSettings>;
 };
 
@@ -119,7 +120,7 @@ export function createJamState(opts: CreateJamOptions, deps: Pick<HostDeps, "now
     cursor: null,
     nowPlaying: null,
     base: (opts.base ?? []).map((track, i): BaseEntry => ({ id: `base:${i}:${track.id}`, track })),
-    playlistLocked: 0,
+    playlistLocked: opts.playlistLocked ?? 0,
     targetPlaylistId: opts.targetPlaylistId,
     groupedPlaylistId: opts.groupedPlaylistId,
   };
@@ -508,11 +509,13 @@ export class JamHost {
 
   // Called whenever the player moves to a new track. Locks that song in at the
   // matching spot of the rotation so the next round starts from there.
-  trackStarted(track: TrackMeta): ScheduledItem {
+  // `external` means it's playing from somewhere other than the jam playlist: it is logged
+  // (and counts for the no-repeat rule) but doesn't use up a queued song or move the rotation.
+  trackStarted(track: TrackMeta, opts: { external?: boolean } = {}): ScheduledItem {
     const s = this.state;
     if (s.nowPlaying && s.nowPlaying.track.id === track.id) return s.nowPlaying;
 
-    const upcoming = buildUpcoming(s);
+    const upcoming = opts.external ? [] : buildUpcoming(s);
     const item = upcoming.find((u) => u.track.id === track.id);
     const playing: ScheduledItem = item ?? { entryId: `ext:${track.id}:${this.deps.now()}`, track, memberId: null, round: null };
 

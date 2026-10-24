@@ -25,6 +25,8 @@ export type RelayOptions = {
   maxMsgsPerSec?: number;
 };
 
+const HOST_MAX_PAYLOAD = 8 * 1024 * 1024;
+
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -61,8 +63,15 @@ export async function startRelay(opts: RelayOptions = {}) {
   };
 
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://x");
-    const rel = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    let rel: string;
+    try {
+      const url = new URL(req.url ?? "/", "http://x");
+      rel = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    } catch {
+      // e.g. "/%ZZ": a bad percent-escape must not take the relay down for everyone.
+      res.writeHead(400, { "Content-Type": "text/plain" }).end("Bad request");
+      return;
+    }
     const file = path.resolve(webRoot, rel);
     // Refuse anything that resolves outside the web root (../ and symlink-free absolute tricks).
     if (file !== webRoot && !file.startsWith(webRoot + path.sep)) {
@@ -82,7 +91,10 @@ export async function startRelay(opts: RelayOptions = {}) {
     });
   });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES * 2 });
+  // Joiners are untrusted and only send small intents; the host sends whole
+  // session snapshots, which can be far larger, so the two get separate limits.
+  const clientWss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  const hostWss = new WebSocketServer({ noServer: true, maxPayload: HOST_MAX_PAYLOAD });
 
   server.on("upgrade", (req, socket, head) => {
     const pathname = new URL(req.url ?? "/", "http://x").pathname;
@@ -94,20 +106,23 @@ export async function startRelay(opts: RelayOptions = {}) {
         socket.destroy();
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => attachHost(ws));
+      hostWss.handleUpgrade(req, socket, head, (ws) => attachHost(ws));
     } else if (pathname === "/ws") {
       if (!host || clients.size >= maxClients) {
         socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
         socket.destroy();
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => attachClient(ws));
+      clientWss.handleUpgrade(req, socket, head, (ws) => attachClient(ws));
     } else {
       socket.destroy();
     }
   });
 
   function attachHost(ws: WebSocket) {
+    // Receiver errors (oversized or malformed frames) are emitted as 'error'; with no
+    // listener Node would treat them as uncaught and exit. ws closes the socket itself.
+    ws.on("error", () => {});
     host?.close(1000, "replaced");
     host = ws;
     ws.on("message", (raw: RawData) => {
@@ -137,6 +152,7 @@ export async function startRelay(opts: RelayOptions = {}) {
   }
 
   function attachClient(ws: WebSocket) {
+    ws.on("error", () => {}); // see attachHost
     const clientId = randomUUID();
     clients.set(clientId, ws);
     toHost({ type: "connected", clientId });
@@ -175,7 +191,8 @@ export async function startRelay(opts: RelayOptions = {}) {
     async close() {
       host?.terminate();
       clients.forEach((c) => c.terminate());
-      wss.close();
+      hostWss.close();
+      clientWss.close();
       await new Promise<void>((r) => server.close(() => r()));
     },
   };

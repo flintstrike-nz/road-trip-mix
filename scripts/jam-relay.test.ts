@@ -118,6 +118,35 @@ describe("relay", () => {
     expect(r.body).not.toContain("secret");
   });
 
+  it("answers a malformed URL with 400 instead of crashing", async () => {
+    expect((await rawGet(relay.port, "/%ZZ")).status).toBe(400);
+    expect((await rawGet(relay.port, "/")).status).toBe(200); // still serving
+  });
+
+  it("survives a joiner sending an oversized frame, and carries large host messages", async () => {
+    const { controller, state } = await startHost();
+    const bad = new Joiner(relay.port);
+    await bad.ready();
+    bad.ws.on("error", () => {});
+    bad.send({ t: "hello", deviceId: "bad-dev", name: "Bad", code: state.settings.joinCode });
+    await bad.until((m) => (m.t === "welcome" ? true : undefined));
+    bad.ws.send("x".repeat(100_000)); // far over the frame limit
+    await vi.waitFor(() => expect(bad.closed).toBe(true));
+
+    // the relay is still up for everyone else
+    const ann = new Joiner(relay.port);
+    await ann.ready();
+    ann.send({ t: "hello", deviceId: "ann-dev", name: "Ann", code: state.settings.joinCode });
+    await ann.until((m) => (m.t === "welcome" ? true : undefined));
+
+    // a session snapshot much bigger than a joiner is allowed to send still reaches joiners
+    for (let i = 0; i < 400; i++) controller.host.setBase([...controller.host.getState().base.map((b) => b.track), track(`big${i}`)]);
+    const big = JSON.stringify({ t: "state", state: { ...controller.host.publicState(), pad: "y".repeat(200_000) } });
+    expect(big.length).toBeGreaterThan(200_000);
+    (controller as unknown as { o: { transport: { broadcast(d: string): void } } }).o.transport.broadcast(big);
+    await ann.until((m) => ((m as { state?: { pad?: string } }).state?.pad ? true : undefined));
+  });
+
   it("refuses joiners while no host is connected", async () => {
     await expect(new Joiner(relay.port).ready()).rejects.toThrow(/503/);
   });

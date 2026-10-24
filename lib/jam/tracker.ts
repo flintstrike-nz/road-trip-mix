@@ -19,6 +19,13 @@ export class PlaybackTracker {
   private running = false;
   private inFlight = false;
   private backoffUntil = 0;
+  private firstReadDone: (() => void) | null = null;
+
+  // Resolves once the first playback read has finished (successfully or not), so callers
+  // can avoid acting on "nothing is playing" when they simply haven't asked yet.
+  readonly firstRead = new Promise<void>((resolve) => {
+    this.firstReadDone = resolve;
+  });
 
   constructor(
     private read: () => Promise<PlaybackSnapshot | null>,
@@ -67,6 +74,8 @@ export class PlaybackTracker {
       this.events.onError?.(e);
     } finally {
       this.inFlight = false;
+      this.firstReadDone?.();
+      this.firstReadDone = null;
       if (this.running) this.timer = setTimeout(() => void this.tick(), delay);
     }
   }

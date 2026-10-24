@@ -11,6 +11,8 @@ import type { JamState } from "./types";
 // Glues the pieces together on the host device: transport <-> JamHost <->
 // Spotify (search, live playlist sync, now-playing) <-> play history.
 
+const FIRST_READ_TIMEOUT_MS = 8000;
+
 export type SyncStatus = { state: "idle" | "syncing" | "error"; message?: string; lastSyncedAt?: number };
 
 export type ControllerOptions = {
@@ -43,6 +45,9 @@ export class JamController {
   private syncing = false;
   private dirty = false;
   private stopped = false;
+  // Playlist sync waits for the first playback read: until we know what's playing we can't
+  // tell played tracks from upcoming ones, and a premature sync would delete the former.
+  private syncReady = false;
 
   constructor(private o: ControllerOptions) {
     const { transport } = o;
@@ -79,7 +84,11 @@ export class JamController {
     this.info = await this.o.transport.start();
     if (this.o.nativePlayer) this.unsubs.push(this.o.nativePlayer.onPlayerState(() => this.tracker.poke()));
     this.tracker.start();
-    this.scheduleSync();
+    // Don't wait forever on a slow or failing Spotify: sync anyway after a few seconds.
+    void Promise.race([this.tracker.firstRead, new Promise((r) => setTimeout(r, FIRST_READ_TIMEOUT_MS))]).then(() => {
+      this.syncReady = true;
+      this.scheduleSync(0);
+    });
     return this.info;
   }
 
@@ -116,7 +125,9 @@ export class JamController {
     const track = next.track;
     if (!track) return;
     const s = this.host.getState();
-    const item = this.host.trackStarted(track);
+    // Playing from a different playlist or album than the jam's? Then it isn't the jam's turn.
+    const external = !!s.targetPlaylistId && !!next.contextUri && next.contextUri !== playlistUri(s.targetPlaylistId);
+    const item = this.host.trackStarted(track, { external });
     const member = item.memberId ? s.members[item.memberId] : undefined;
     await this.recorder.begin({
       track,
@@ -132,7 +143,7 @@ export class JamController {
   }
 
   private scheduleSync(delay = this.o.syncDebounceMs ?? 350) {
-    if (this.stopped || !this.host.getState().targetPlaylistId) return;
+    if (this.stopped || !this.syncReady || !this.host.getState().targetPlaylistId) return;
     if (this.syncTimer) clearTimeout(this.syncTimer);
     this.syncTimer = setTimeout(() => void this.runSync(), delay);
   }
@@ -155,7 +166,9 @@ export class JamController {
       await syncPlaylistLive(this.o.tokens, playlistId, upcoming, (uris) => {
         // Lock through the playing song when it's in the playlist; if something
         // else is playing, keep the last known lock so history isn't rewritten.
-        const found = lockedCount(uris, playingUri);
+        // Search from the last known position: a song that also appears earlier must not
+        // move the lock backwards over tracks that have already played.
+        const found = lockedCount(uris, playingUri, Math.max(0, s.playlistLocked - 1));
         if (found > 0) {
           this.host.setPlaylistLocked(found);
           return found;

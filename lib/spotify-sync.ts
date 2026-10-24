@@ -35,11 +35,25 @@ export function planTailSync(current: string[], upcoming: string[], locked: numb
 }
 
 // Index just past the playing track, so everything before it is locked.
-// `from` skips earlier occurrences when the same song appears twice.
-export function lockedCount(current: string[], playingUri: string | null | undefined, from = 0): number {
+// Spotify doesn't say *which* copy of a repeated song is playing, so:
+//  - `from` skips earlier copies (callers pass the last known position, which
+//    only ever moves forward during a session);
+//  - `pick: "last"` locks through the final copy instead, which can leave a few
+//    not-yet-played tracks untouched but never rewrites anything already played.
+export function lockedCount(
+  current: string[],
+  playingUri: string | null | undefined,
+  from = 0,
+  pick: "first" | "last" = "first"
+): number {
   if (!playingUri) return 0;
-  const i = current.findIndex((u, idx) => idx >= from && u === playingUri);
-  return i >= 0 ? i + 1 : 0;
+  let found = -1;
+  for (let i = Math.max(0, from); i < current.length; i++) {
+    if (current[i] !== playingUri) continue;
+    found = i;
+    if (pick === "first") break;
+  }
+  return found >= 0 ? found + 1 : 0;
 }
 
 export async function getPlaylistUris(tokens: TokenSource, playlistId: string): Promise<{ uris: string[]; snapshotId?: string }> {
@@ -122,7 +136,7 @@ export async function syncGeneratedLive(
   playingUri: string | null
 ): Promise<SyncPlan> {
   const { uris, snapshotId } = await getPlaylistUris(tokens, playlistId);
-  const locked = lockedCount(uris, playingUri);
+  const locked = lockedCount(uris, playingUri, 0, "last"); // repeated songs: err towards not rewriting
   const played = new Set(uris.slice(0, locked));
   const plan = planTailSync(uris, generatedUris.filter((u) => !played.has(u)), locked);
   await applySyncPlan(tokens, playlistId, plan, snapshotId);

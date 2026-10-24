@@ -87,6 +87,7 @@ export default function JamHome() {
       let targetPlaylistId: string | undefined;
       let groupedPlaylistId: string | undefined;
       let base: Awaited<ReturnType<typeof fetchPlaylistTracks>> = [];
+      let playlistLocked = 0;
 
       if (source === "new") {
         targetPlaylistId = await createPlaylist(tokens, name.trim() || "Road Trip Jam");
@@ -101,6 +102,8 @@ export default function JamHome() {
         const playingHere = now?.contextUri === `spotify:playlist:${targetPlaylistId}` ? now.track?.id : undefined;
         const at = playingHere ? all.findIndex((t) => t.id === playingHere) : -1;
         base = at >= 0 ? all.slice(at + 1) : all;
+        // Everything up to and including the playing song is already spoken for.
+        playlistLocked = at >= 0 ? at + 1 : 0;
       }
 
       const state = createJamState({
@@ -109,6 +112,7 @@ export default function JamHome() {
         base,
         targetPlaylistId,
         groupedPlaylistId,
+        playlistLocked,
       });
       saveJam(state);
       try {

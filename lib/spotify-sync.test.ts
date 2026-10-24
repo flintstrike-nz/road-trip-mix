@@ -52,6 +52,13 @@ describe("lockedCount", () => {
   it("respects the search start for repeated songs", () => {
     expect(lockedCount(u("a", "b", "a"), "spotify:track:a", 1)).toBe(3);
   });
+  it("finds the copy at the start position itself, so an unchanged position stays put", () => {
+    expect(lockedCount(u("a", "b", "a", "c"), "spotify:track:a", 2)).toBe(3);
+  });
+  it("can lock through the last copy of a repeated song, to never rewrite played tracks", () => {
+    expect(lockedCount(u("a", "b", "a", "c"), "spotify:track:a", 0, "last")).toBe(3);
+    expect(lockedCount(u("a", "b", "c"), "spotify:track:z", 0, "last")).toBe(0);
+  });
 });
 
 function fakeFetch(handler: (url: string, init: RequestInit) => unknown) {
