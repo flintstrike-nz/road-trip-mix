@@ -34,3 +34,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# jam joiner bundle (built by npm run build:jam-client)
+/jam-client/dist/
+
+# android
+/android/app/src/main/assets/jam-client/
+/android/app/libs/
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/captures/

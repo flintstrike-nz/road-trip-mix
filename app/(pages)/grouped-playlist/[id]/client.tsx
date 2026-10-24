@@ -13,6 +13,8 @@ import {
   type SortRule,
 } from "@/lib/grouped-playlists";
 import { getPlaylistTracksClient, getPlaylistMeta, type SimplifiedTrack } from "@/lib/spotify";
+import { getPlayback, playlistUri } from "@/lib/jam/spotify-backend";
+import { syncGeneratedLive } from "@/lib/spotify-sync";
 import RulesModal from "@/app/components/RulesModal";
 import "../../playlist/[id]/style.css";
 
@@ -162,9 +164,19 @@ async function pushToSpotify(
     pid = (await createRes.json()).id as string;
   }
 
-  // Replace tracks in chunks of 100 (Spotify API limit)
   const uris = tracks.map((t) => `spotify:track:${t.id}`);
 
+  // Existing playlist: update it live. Songs already played or playing are left
+  // alone and only the rest is rewritten, so this is safe mid-playback.
+  if (existingPlaylistId && pid === existingPlaylistId) {
+    const tokens = { get: async () => accessToken };
+    const now = await getPlayback(tokens).catch(() => null);
+    const playingUri = now?.contextUri === playlistUri(pid) ? now.track?.uri ?? null : null;
+    await syncGeneratedLive(tokens, pid, uris, playingUri);
+    return { playlistId: pid };
+  }
+
+  // New playlist: Spotify replaces at most 100 items per call, so append the rest.
   const putRes = await fetch(`https://api.spotify.com/v1/playlists/${pid}/items`, {
     method: "PUT",
     headers,
@@ -706,6 +718,15 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
               {syncing ? "Syncing…" : playlist.spotifyPlaylistId ? "Update Spotify Playlist" : "Push to Spotify"}
             </button>
           )}
+          {playlist.spotifyPlaylistId && (
+            <Link
+              href={`/jam?playlist=${playlist.id}`}
+              className="px-5 py-2 rounded-full text-sm font-semibold border transition-colors"
+              style={{ borderColor: "rgba(255,255,255,0.3)", color: "var(--text-base)" }}
+            >
+              Start a jam
+            </Link>
+          )}
         </div>
 
         {/* Sync status */}
@@ -726,7 +747,7 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
                 >
                   Open in Spotify ↗
                 </a>
-                {" · "}One-way sync — changes made in Spotify will be overwritten on next update.
+                {" · "}Updates are live — songs already played or playing are left alone.
               </span>
             )}
           </div>

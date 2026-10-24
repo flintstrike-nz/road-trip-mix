@@ -1,0 +1,95 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace = "com.roadtripmix.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.roadtripmix.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+// --- Spotify Android SDK (App Remote) ---------------------------------------
+// The App Remote SDK isn't on Maven Central; Spotify ships it as an AAR on GitHub. Fetch it on
+// first build instead of committing a binary (see https://github.com/spotify/android-sdk).
+def spotifyAppRemote = file('libs/spotify-app-remote-release-0.8.0.aar')
+tasks.register('fetchSpotifyAppRemote') {
+    outputs.file(spotifyAppRemote)
+    doLast {
+        if (!spotifyAppRemote.exists()) {
+            spotifyAppRemote.parentFile.mkdirs()
+            def url = 'https://github.com/spotify/android-sdk/releases/download/v0.8.0-appremote_v2.1.0-auth/spotify-app-remote-release-0.8.0.aar'
+            logger.lifecycle("Downloading Spotify App Remote SDK from ${url}")
+            new URL(url).withInputStream { i -> spotifyAppRemote.withOutputStream { it << i } }
+        }
+    }
+}
+
+// --- Jam joiner page ------------------------------------------------------------
+// The static page other devices open from the host's hotspot is built by `npm run build:jam-client`
+// and bundled into the app's assets so it works with no internet.
+tasks.register('copyJamClient', Copy) {
+    from('../../jam-client/dist')
+    into('src/main/assets/jam-client')
+    doFirst {
+        if (!file('../../jam-client/dist/index.html').exists()) {
+            throw new GradleException('jam-client/dist is missing. Run `npm run build:jam-client` first (or `npm run android:sync`).')
+        }
+    }
+}
+preBuild.dependsOn 'fetchSpotifyAppRemote', 'copyJamClient'
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    implementation files(spotifyAppRemote).builtBy('fetchSpotifyAppRemote')
+    implementation 'com.google.code.gson:gson:2.11.0' // required by the Spotify App Remote SDK
+    testImplementation "junit:junit:$junitVersion"
+    testImplementation 'org.java-websocket:Java-WebSocket:1.5.7' // independent client for RelayServerTest
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

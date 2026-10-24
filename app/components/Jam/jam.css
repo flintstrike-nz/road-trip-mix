@@ -1,0 +1,51 @@
+.jam { color: var(--text-base); }
+.jam__title { font-size: 1.5rem; font-weight: 800; }
+.jam__subtitle { color: var(--text-subdued); font-size: 0.875rem; margin: 4px 0 20px; max-width: 640px; }
+.jam__subtitle a { color: var(--text-bright-accent); text-decoration: underline; }
+.jam__top { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.jam__section { background: var(--background-elevated-base); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.jam__section h3 { font-size: 0.8125rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-subdued); margin-bottom: 12px; }
+.jam__section-head { display: flex; justify-content: space-between; align-items: center; }
+.jam__spaced { margin-top: 20px; }
+.jam__cols { display: grid; gap: 16px; grid-template-columns: 1fr; }
+@media (min-width: 900px) { .jam__cols { grid-template-columns: 3fr 2fr; } }
+.jam__row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.jam__row + .jam__row { border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.jam__info { flex: 1; min-width: 0; }
+.jam__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jam__meta { color: var(--text-subdued); font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jam__num { width: 20px; text-align: right; color: var(--text-subdued); font-size: 0.8125rem; }
+.jam__dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.jam__art { width: 40px; height: 40px; border-radius: 4px; background: #333; object-fit: cover; flex: none; }
+.jam__row-actions { display: flex; gap: 2px; }
+.jam__icon { background: none; border: none; color: var(--text-subdued); padding: 6px 8px; border-radius: 6px; cursor: pointer; min-width: 32px; }
+.jam__icon:hover:not(:disabled) { background: var(--background-tinted-base); color: var(--text-base); }
+.jam__icon:disabled { opacity: 0.25; cursor: default; }
+.jam__btn { padding: 8px 18px; border-radius: 999px; background: var(--text-bright-accent); color: #000; font-weight: 700; font-size: 0.875rem; border: none; cursor: pointer; }
+.jam__btn:disabled { opacity: 0.5; cursor: default; }
+.jam__btn--ghost { background: none; color: var(--text-base); border: 1px solid rgba(255, 255, 255, 0.3); }
+.jam__controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.jam__muted, .jam__hint { color: var(--text-subdued); font-size: 0.8125rem; }
+.jam__error { color: var(--text-negative); font-size: 0.875rem; margin-top: 8px; }
+.jam__field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 0.875rem; border: none; padding: 0; }
+.jam__field legend { margin-bottom: 6px; }
+.jam__field input[type="text"], .jam__field input:not([type]), .jam__field select, .jam__search, .jam select, .jam input[type="number"] {
+  background: #2a2a2a; border: 1px solid rgba(255, 255, 255, 0.15); color: var(--text-base); border-radius: 6px; padding: 8px 10px; font-size: 0.9375rem;
+}
+.jam__search { width: 100%; margin-bottom: 8px; }
+.jam__radio { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; margin: 6px 0; flex-wrap: wrap; }
+.jam__resume { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.jam__resume-link { display: flex; flex-direction: column; font-size: 0.8125rem; color: var(--text-subdued); }
+.jam__resume-link strong { color: var(--text-base); font-size: 0.9375rem; }
+.jam__join { display: flex; flex-wrap: wrap; gap: 32px; }
+.jam__join-step { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.jam__step-label { font-weight: 700; font-size: 0.875rem; }
+.jam__qr { background: #fff; border-radius: 6px; width: 160px; height: 160px; }
+.jam__mono { font-family: var(--font-geist-mono), monospace; font-size: 0.8125rem; word-break: break-all; }
+.jam__code { font-size: 1rem; }
+.jam__code strong { font-size: 1.5rem; letter-spacing: 0.15em; color: var(--text-bright-accent); }
+.jam__webplayer { margin-top: 12px; }
+.jam code { background: #2a2a2a; padding: 1px 5px; border-radius: 4px; }
+.jam__tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+.jam__tab { padding: 6px 14px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.25); color: var(--text-subdued); background: none; font-size: 0.875rem; cursor: pointer; }
+.jam__tab--on { background: var(--text-base); color: #000; border-color: var(--text-base); font-weight: 700; }
