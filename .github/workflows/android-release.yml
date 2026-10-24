@@ -127,12 +127,22 @@ jobs:
 
           # "Latest" always means the highest build number that exists, whatever order builds finish in
           # (or if an old run is re-run): releases/latest/download/road-trip-mix.apk never goes backwards.
-          NEWEST="$(gh release list --limit 100 --json tagName --jq '.[].tagName' \
-            | sed -n 's/^v[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\)$/\1 &/p' \
-            | sort -n | tail -1 | cut -d' ' -f2)"
-          if [ -n "$NEWEST" ]; then
+          # Runs can overlap, so another run may publish between our lookup and our edit. After promoting,
+          # look again and repeat if the newest tag changed: whichever run acts last leaves "latest"
+          # on the newest release.
+          newest_tag() {
+            gh release list --limit 100 --json tagName --jq '.[].tagName' \
+              | sed -n 's/^v[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\)$/\1 &/p' \
+              | sort -n | tail -1 | cut -d' ' -f2
+          }
+          for attempt in 1 2 3 4 5; do
+            NEWEST="$(newest_tag)"
+            [ -n "$NEWEST" ] || break
             gh release edit "$NEWEST" --latest
-          fi
+            [ "$(newest_tag)" = "$NEWEST" ] && exit 0
+          done
+          [ -z "${NEWEST:-}" ] && exit 0
+          echo "::warning title=Could not settle which release is latest::Newer releases kept appearing while promoting. The next release run will correct it."
 
       - name: Summary
         env:
