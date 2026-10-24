@@ -51,6 +51,16 @@ How it works:
 - You can start a jam on a new playlist, on a playlist made by this app (the **Start a jam** button on a grouped playlist), or on any of your Spotify playlists. Songs already in the playlist keep playing after everyone's queued songs, so it never runs dry.
 - The host can reorder the rotation, remove songs or people, and change the per-person queue limit.
 
+**Host rules.** The host can turn these on from the console (joiners see them under *House rules* and get a specific message when something is refused):
+
+- **Each song plays once** — a song that has already played this session can't be added again. It also matches the same title and artist on a different release (a reissue or a "greatest hits" copy).
+- **Max songs per artist** and **per album** — counted either *in the queue* (what's playing or queued right now) or *this session* (including everything already played). A song with several credited artists counts toward each of them.
+- **Songs per person** in the queue, and whether the same song may be queued twice at once.
+
+Rules are checked when songs are added, so tightening one later doesn't remove what's already queued. They apply the same way to single songs and to albums/playlists.
+
+**Building a queue.** Search has *Songs*, *Albums* and *Playlists* tabs. **Add all** puts a whole album or playlist (first 100 songs) into your queue in order, **🔀** adds it shuffled; anything the rules or your queue limit refuse is skipped and summarised ("Added 9. Skipped 3: 2 already played, 1 over the artist limit."). **Shuffle** and **Clear all** act on your own queue; the host can do either for anyone. Everything can still be reordered by dragging or with the arrows. Playlists must be readable with the host's Spotify account.
+
 Rotation rules: a person who adds a song joins the next turn they haven't had yet — the current round if their position is still ahead of the playing song, otherwise the next round. Empty queues are skipped.
 
 Jam sessions are saved on the host device, so you can close the app and resume.

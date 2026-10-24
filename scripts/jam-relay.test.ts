@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as WsClient } from "ws";
 import { MemoryHistoryStore } from "../lib/history";
-import { createJamState } from "../lib/jam/host";
+import { createJamState, type HostDeps } from "../lib/jam/host";
 import { JamController } from "../lib/jam/controller";
 import type { ServerMessage } from "../lib/jam/protocol";
 import type { PlaybackSnapshot } from "../lib/jam/spotify-backend";
@@ -74,7 +74,7 @@ class Joiner {
   }
 }
 
-async function startHost(opts: { target?: string; base?: ReturnType<typeof track>[]; readPlayback?: () => Promise<PlaybackSnapshot | null> } = {}) {
+async function startHost(opts: { target?: string; base?: ReturnType<typeof track>[]; readPlayback?: () => Promise<PlaybackSnapshot | null>; loadCollection?: HostDeps["loadCollection"] } = {}) {
   const state = createJamState({ name: "Trip", hostName: "Dad", hostMemberId: "dad", base: opts.base, targetPlaylistId: opts.target });
   const history = new MemoryHistoryStore();
   const controller = new JamController({
@@ -82,7 +82,8 @@ async function startHost(opts: { target?: string; base?: ReturnType<typeof track
     transport: new WebSocketHostTransport(`ws://127.0.0.1:${relay.port}/host`),
     tokens: { get: async () => "tok" },
     history,
-    search: async (q) => [track(q.padEnd(3, "x"))],
+    search: async (q) => ({ tracks: [track(q.padEnd(3, "x"))], collections: [] }),
+    loadCollection: opts.loadCollection,
     readPlayback: opts.readPlayback ?? (async () => null),
     pollIntervalMs: 20,
     syncDebounceMs: 5,
@@ -179,6 +180,37 @@ describe("jam session over the relay", () => {
     ann.send({ t: "search", reqId: "7", q: "hey" });
     const res = await ann.until((m) => (m.t === "search-result" && m.reqId === "7" ? m.tracks : undefined));
     expect(res[0].name).toBe("Song hey");
+  });
+
+  it("enforces host rules, adds albums, shuffles and clears over real sockets", async () => {
+    const abba = (i: number) => ({ ...track(`abba${i}`), artists: [{ name: "ABBA" }], album: { name: "Gold" } });
+    const albumTracks = [abba(1), abba(2), abba(3), { ...track("queen1"), artists: [{ name: "Queen" }], album: { name: "Hits" } }];
+    const { controller, state } = await startHost({ loadCollection: async () => albumTracks });
+    controller.host.setSettings("dad", { noRepeats: true, maxPerArtist: { limit: 2, scope: "session" } });
+    controller.host.trackStarted(track("queen1")); // already played
+
+    const ann = new Joiner(relay.port);
+    await ann.ready();
+    ann.send({ t: "hello", deviceId: "ann-dev", name: "Ann", code: state.settings.joinCode });
+    await ann.until((m) => (m.t === "welcome" ? true : undefined));
+    // the joiner is told the rules
+    expect(ann.latest()!.settings).toMatchObject({ noRepeats: true, maxPerArtist: { limit: 2, scope: "session" } });
+
+    ann.send({ t: "add-collection", reqId: "1", kind: "album", id: "A".repeat(22) });
+    const res = await ann.until((m) => (m.t === "add-result" && m.reqId === "1" ? m : undefined));
+    expect(res).toMatchObject({ added: 2 });
+    expect(res.skipped).toEqual(expect.arrayContaining([{ reason: "artist", count: 1 }, { reason: "repeat", count: 1 }]));
+    const mine = () => ann.latest()!.queues[ann.memberId()].map((e) => e.track.name);
+    await vi.waitFor(() => expect(mine()).toEqual(["Song abba1", "Song abba2"]));
+
+    ann.send({ t: "shuffle" });
+    await vi.waitFor(() => expect(ann.latest()!.queues[ann.memberId()]).toHaveLength(2));
+    ann.send({ t: "clear" });
+    await vi.waitFor(() => expect(mine()).toEqual([]));
+
+    // a single add that breaks a rule gets a specific message
+    ann.send({ t: "add", track: track("queen1") });
+    expect(await ann.until((m) => (m.t === "error" && m.code === "rule-repeat" ? m.message : undefined))).toMatch(/already played/);
   });
 
   it("drops joiners when the host goes away", async () => {

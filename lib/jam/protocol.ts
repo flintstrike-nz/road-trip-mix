@@ -1,4 +1,5 @@
-import type { PublicJamState, TrackMeta } from "./types";
+import type { SkipReason } from "./rules";
+import type { CollectionMeta, PublicJamState, TrackMeta } from "./types";
 
 // Wire protocol between joiner devices and the host. Messages are JSON text
 // frames. Everything coming off the network is untrusted, so the host only ever
@@ -12,13 +13,19 @@ export type ClientMessage =
   | { t: "add"; track: TrackMeta; index?: number }
   | { t: "remove"; entryId: string }
   | { t: "move"; entryId: string; toIndex: number }
-  | { t: "search"; reqId: string; q: string }
+  | { t: "search"; reqId: string; q: string; kind: SearchKind }
+  | { t: "add-collection"; reqId: string; kind: "album" | "playlist"; id: string; shuffle?: boolean }
+  | { t: "clear" }
+  | { t: "shuffle" }
   | { t: "rename"; name: string };
+
+export type SearchKind = "track" | "album" | "playlist";
 
 export type ServerMessage =
   | { t: "welcome"; memberId: string; state: PublicJamState }
   | { t: "state"; state: PublicJamState }
-  | { t: "search-result"; reqId: string; tracks: TrackMeta[]; error?: string }
+  | { t: "search-result"; reqId: string; kind: SearchKind; tracks: TrackMeta[]; collections: CollectionMeta[]; error?: string }
+  | { t: "add-result"; reqId: string; added: number; skipped: { reason: SkipReason; count: number }[]; error?: string }
   | { t: "error"; code: ErrorCode; message: string }
   | { t: "kicked" };
 
@@ -28,12 +35,16 @@ export type ErrorCode =
   | "not-joined"
   | "queue-full"
   | "duplicate"
+  | "rule-repeat"
+  | "rule-artist"
+  | "rule-album"
   | "not-found"
   | "forbidden"
   | "rate-limited"
   | "bad-request";
 
 const TRACK_ID = /^[A-Za-z0-9]{22}$/;
+const SPOTIFY_ID = TRACK_ID; // albums and playlists use the same 22-char base62 ids
 
 function str(v: unknown, max = MAX_STR): string | null {
   if (typeof v !== "string") return null;
@@ -120,8 +131,20 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     case "search": {
       const reqId = str(m.reqId, 32);
       const q = str(m.q, 100);
-      return reqId && q ? { t: "search", reqId, q } : null;
+      const kind = m.kind === "album" || m.kind === "playlist" ? m.kind : "track";
+      return reqId && q ? { t: "search", reqId, q, kind } : null;
     }
+    case "add-collection": {
+      const reqId = str(m.reqId, 32);
+      const id = str(m.id, 22);
+      if (!reqId || !id || !SPOTIFY_ID.test(id)) return null;
+      if (m.kind !== "album" && m.kind !== "playlist") return null;
+      return { t: "add-collection", reqId, kind: m.kind, id, shuffle: m.shuffle === true };
+    }
+    case "clear":
+      return { t: "clear" };
+    case "shuffle":
+      return { t: "shuffle" };
     case "rename": {
       const name = str(m.name, 30);
       return name ? { t: "rename", name } : null;

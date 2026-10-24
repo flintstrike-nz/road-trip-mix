@@ -2,6 +2,11 @@ import { createJamState, JamHost, type HostDeps } from "./host";
 import type { ServerMessage } from "./protocol";
 import type { JamState, TrackMeta } from "./types";
 
+// A track with explicit artist/album, for rule tests.
+export function trackBy(n: string | number, artist: string, album: string): TrackMeta {
+  return { ...track(n), artists: [{ name: artist }], album: { name: album } };
+}
+
 export function track(n: string | number): TrackMeta {
   const id = String(n).padStart(22, "x");
   return {
@@ -14,7 +19,7 @@ export function track(n: string | number): TrackMeta {
   };
 }
 
-export function makeHost(opts: { base?: TrackMeta[]; search?: HostDeps["search"] } = {}) {
+export function makeHost(opts: { base?: TrackMeta[]; search?: HostDeps["search"]; loadCollection?: HostDeps["loadCollection"]; random?: () => number } = {}) {
   let t = 1000;
   let id = 0;
   const sent: { to: string; msg: ServerMessage }[] = [];
@@ -25,6 +30,8 @@ export function makeHost(opts: { base?: TrackMeta[]; search?: HostDeps["search"]
     now: () => t,
     genId: () => `id${++id}`,
     search: opts.search,
+    loadCollection: opts.loadCollection,
+    random: opts.random,
     send: (to, msg) => sent.push({ to, msg }),
     broadcast: (msg) => broadcasts.push(msg),
     close: (c) => closed.push(c),

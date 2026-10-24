@@ -62,10 +62,41 @@ export type PlayedMarker = {
   turn: number;
 };
 
+// "queue" counts what's playing or queued right now; "session" also counts
+// everything already played in this session.
+export type RuleScope = "queue" | "session";
+
+export type LimitRule = { limit: number | null; scope: RuleScope }; // limit null = off
+
 export type JamSettings = {
   maxQueuePerMember: number;
   allowDuplicates: boolean; // same song may be queued twice in the upcoming list
+  noRepeats: boolean; // a song that already played this session can't be added again
+  maxPerArtist: LimitRule; // max songs by the same artist
+  maxPerAlbum: LimitRule; // max songs from the same album
   joinCode: string;
+};
+
+export type RuleSettings = Omit<JamSettings, "joinCode">;
+
+// One entry per track that started playing this session (any source).
+export type PlayedEntry = {
+  trackId: string;
+  name: string;
+  artists: { id?: string; name: string }[];
+  album: { id?: string; name: string };
+  memberId: string | null;
+  at: number;
+};
+
+// Albums and playlists a member can add to their queue in one go.
+export type CollectionMeta = {
+  kind: "album" | "playlist";
+  id: string;
+  name: string;
+  subtitle: string; // artist(s) for albums, owner for playlists
+  imageUrl?: string;
+  trackCount?: number;
 };
 
 export type JamState = {
@@ -82,6 +113,7 @@ export type JamState = {
   // you act as that member.
   devices: Record<string, string>;
   banned: string[]; // device tokens removed by the host
+  played: PlayedEntry[]; // this session's play log, oldest first (capped)
   queues: Record<string, QueueEntry[]>; // per-member personal queue, in the order the member wants them played
   // Last round each member had a song locked in (played or playing); -1 = never.
   lastRound: Record<string, number>;
@@ -109,7 +141,7 @@ export type PublicJamState = {
   name: string;
   rev: number;
   hostMemberId: string;
-  settings: Pick<JamSettings, "maxQueuePerMember" | "allowDuplicates">;
+  settings: RuleSettings;
   memberOrder: string[];
   members: Record<string, Member>;
   queues: Record<string, QueueEntry[]>;

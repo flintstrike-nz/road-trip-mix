@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { track, makeHost } from "./test-utils";
+import { track, trackBy, makeHost } from "./test-utils";
 
 describe("JamHost", () => {
   it("rejects a wrong join code and accepts the right one", () => {
@@ -137,7 +137,7 @@ describe("JamHost", () => {
   });
 
   it("answers searches and rate limits rapid ones", async () => {
-    const { host, join, sent } = makeHost({ search: async (q) => [track(q)] });
+    const { host, join, sent } = makeHost({ search: async (q) => ({ tracks: [track(q)], collections: [] }) });
     join("c1", "ann-dev", "Ann");
     host.handleRaw("c1", JSON.stringify({ t: "search", reqId: "r1", q: "abc" }));
     host.handleRaw("c1", JSON.stringify({ t: "search", reqId: "r2", q: "abd" }));
@@ -147,5 +147,153 @@ describe("JamHost", () => {
     expect(results).toHaveLength(2);
     expect(results.find((m) => m.t === "search-result" && m.reqId === "r1")).toMatchObject({ tracks: [{ name: "Song abc" }] });
     expect(results.find((m) => m.t === "search-result" && m.reqId === "r2")).toMatchObject({ error: expect.any(String) });
+  });
+});
+
+describe("queue tools", () => {
+  it("lets members clear and shuffle their own queue, and the host anyone's", () => {
+    // a deterministic "random" so the shuffle is predictable
+    let n = 0;
+    const { host, join, queueIds } = makeHost({ random: () => [0.1, 0.9, 0.4, 0.7][n++ % 4] });
+    const ann = join("c1", "ann-dev", "Ann");
+    const bob = join("c2", "bob-dev", "Bob");
+    ["a", "b", "c", "d", "e"].forEach((x) => host.addTrack(ann, track(x)));
+    const before = queueIds(ann);
+
+    expect(host.shuffleQueue(bob, ann)).toMatchObject({ ok: false, code: "forbidden" });
+    expect(host.clearQueue(bob, ann)).toMatchObject({ ok: false, code: "forbidden" });
+
+    expect(host.shuffleQueue(ann, ann).ok).toBe(true);
+    const after = queueIds(ann);
+    expect(after).not.toEqual(before);
+    expect([...after].sort()).toEqual([...before].sort()); // same songs, new order
+
+    expect(host.shuffleQueue("host", ann).ok).toBe(true);
+    expect(host.clearQueue("host", ann).ok).toBe(true);
+    expect(queueIds(ann)).toEqual([]);
+    expect(host.clearQueue(ann, ann).ok).toBe(true); // clearing an empty queue is fine
+    expect(host.clearQueue(ann, "nobody")).toMatchObject({ ok: false, code: "not-found" });
+  });
+
+  it("clear and shuffle work as messages from a joiner", () => {
+    const { host, join, queueIds, sent } = makeHost();
+    const ann = join("c1", "ann-dev", "Ann");
+    host.addTrack(ann, track(1));
+    host.addTrack(ann, track(2));
+    host.handleRaw("c1", JSON.stringify({ t: "shuffle" }));
+    expect(queueIds(ann)).toHaveLength(2);
+    host.handleRaw("c1", JSON.stringify({ t: "clear" }));
+    expect(queueIds(ann)).toEqual([]);
+    expect(sent.some((s) => s.msg.t === "error")).toBe(false);
+  });
+
+  it("a shuffled queue changes the rotation order accordingly", () => {
+    const { host, join, order } = makeHost({ random: () => 0 }); // Fisher–Yates with 0 rotates left
+    const ann = join("c1", "ann-dev", "Ann");
+    ["a", "b", "c"].forEach((x) => host.addTrack(ann, track(x)));
+    expect(order()).toEqual(["Song a", "Song b", "Song c"]);
+    host.shuffleQueue(ann, ann);
+    expect(order()).toEqual(["Song b", "Song c", "Song a"]);
+  });
+});
+
+describe("adding albums and playlists", () => {
+  const album = [1, 2, 3, 4, 5].map((i) => track(`album${i}`));
+
+  it("adds a whole album to the member's queue in order, in one update", async () => {
+    const { host, join, queueIds, broadcasts } = makeHost({ loadCollection: async () => album });
+    const ann = join("c1", "ann-dev", "Ann");
+    const before = broadcasts.length;
+    const r = await host.addCollection(ann, "album", "A".repeat(22));
+    expect(r).toEqual({ added: 5, skipped: [] });
+    expect(queueIds(ann)).toEqual(album.map((t) => t.name));
+    expect(broadcasts.length - before).toBe(1); // one snapshot, not five
+  });
+
+  it("can shuffle before adding", async () => {
+    const { host, join, queueIds } = makeHost({ loadCollection: async () => album, random: () => 0 });
+    const ann = join("c1", "ann-dev", "Ann");
+    await host.addCollection(ann, "playlist", "P".repeat(22), true);
+    expect(queueIds(ann)).toEqual(["Song album2", "Song album3", "Song album4", "Song album5", "Song album1"]);
+  });
+
+  it("stops at the queue limit and applies every rule, reporting what was skipped", async () => {
+    const songs = [
+      trackBy("p1", "ABBA", "Gold"),
+      trackBy("p2", "ABBA", "Gold"), // over the artist limit
+      trackBy("p3", "Queen", "Hits"),
+      trackBy("p4", "Cher", "Believe"),
+      trackBy("p5", "Blur", "Parklife"), // queue full by now
+    ];
+    const { host, join, queueIds } = makeHost({ loadCollection: async () => songs });
+    const ann = join("c1", "ann-dev", "Ann");
+    host.setSettings("host", { maxQueuePerMember: 2, maxPerArtist: { limit: 1, scope: "queue" }, noRepeats: true });
+    host.trackStarted(trackBy("p3", "Queen", "Hits")); // already played → repeat
+    const r = await host.addCollection(ann, "playlist", "P".repeat(22));
+    expect(r.added).toBe(2);
+    expect(queueIds(ann)).toEqual(["Song p1", "Song p4"]);
+    const byReason = Object.fromEntries(r.skipped.map((s) => [s.reason, s.count]));
+    expect(byReason).toEqual({ artist: 1, repeat: 1, full: 1 });
+  });
+
+  it("caps very large playlists at 100 tracks", async () => {
+    const huge = Array.from({ length: 300 }, (_, i) => track(`h${i}`));
+    let asked = 0;
+    const { host, join } = makeHost({ loadCollection: async (_k, _i, max) => ((asked = max), huge) });
+    const ann = join("c1", "ann-dev", "Ann");
+    host.setSettings("host", { maxQueuePerMember: 100 });
+    const r = await host.addCollection(ann, "playlist", "P".repeat(22));
+    expect(asked).toBe(100);
+    expect(r.added).toBe(100);
+  });
+
+  it("works over the wire: add-result, rejects bad ids, rate limits repeats", async () => {
+    const { host, join, sent, advance } = makeHost({ loadCollection: async () => album });
+    join("c1", "ann-dev", "Ann");
+    const id = "A".repeat(22);
+    host.handleRaw("c1", JSON.stringify({ t: "add-collection", reqId: "1", kind: "album", id: "not-an-id" }));
+    expect(sent.at(-1)?.msg).toMatchObject({ t: "error", code: "bad-request" });
+
+    host.handleRaw("c1", JSON.stringify({ t: "add-collection", reqId: "2", kind: "album", id }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent.at(-1)?.msg).toMatchObject({ t: "add-result", reqId: "2", added: 5 });
+
+    host.handleRaw("c1", JSON.stringify({ t: "add-collection", reqId: "3", kind: "album", id }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent.at(-1)?.msg).toMatchObject({ t: "add-result", reqId: "3", added: 0, error: expect.any(String) });
+
+    advance(2000);
+    host.handleRaw("c1", JSON.stringify({ t: "add-collection", reqId: "4", kind: "album", id }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent.at(-1)?.msg).toMatchObject({ t: "add-result", reqId: "4", added: 0, skipped: [{ reason: "duplicate", count: 5 }] });
+  });
+
+  it("reports a Spotify failure instead of crashing", async () => {
+    const { host, join, sent } = makeHost({ loadCollection: async () => { throw new Error("Spotify 403: private playlist"); } });
+    join("c1", "ann-dev", "Ann");
+    host.handleRaw("c1", JSON.stringify({ t: "add-collection", reqId: "1", kind: "playlist", id: "P".repeat(22) }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent.at(-1)?.msg).toMatchObject({ t: "add-result", added: 0, error: "Spotify 403: private playlist" });
+  });
+
+  it("search can ask for albums and playlists", async () => {
+    const col = { kind: "album" as const, id: "A".repeat(22), name: "Rumours", subtitle: "Fleetwood Mac · 1977" };
+    const { host, join, sent } = makeHost({ search: async (_q, kind) => (kind === "album" ? { tracks: [], collections: [col] } : { tracks: [], collections: [] }) });
+    join("c1", "ann-dev", "Ann");
+    host.handleRaw("c1", JSON.stringify({ t: "search", reqId: "s", q: "rum", kind: "album" }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent.at(-1)?.msg).toMatchObject({ t: "search-result", kind: "album", collections: [{ name: "Rumours" }] });
+  });
+});
+
+describe("play log", () => {
+  it("records every track that starts, once, and caps its size", () => {
+    const { host } = makeHost();
+    host.trackStarted(track(1));
+    host.trackStarted(track(1)); // poll repeat: ignored
+    host.trackStarted(track(2));
+    expect(host.getState().played.map((p) => p.trackId)).toEqual([track(1).id, track(2).id]);
+    for (let i = 0; i < 2100; i++) host.trackStarted(track(`l${i}`));
+    expect(host.getState().played).toHaveLength(2000);
   });
 });

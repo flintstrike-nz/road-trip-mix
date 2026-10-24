@@ -3,7 +3,7 @@ import type { TokenSource } from "../spotify-api";
 import { lockedCount, syncPlaylistLive } from "../spotify-sync";
 import { JamHost, type HostDeps } from "./host";
 import type { ServerMessage } from "./protocol";
-import { getPlayback, playlistUri, searchTracks, type PlaybackSnapshot } from "./spotify-backend";
+import { getPlayback, loadCollection, playlistUri, searchCatalog, type PlaybackSnapshot } from "./spotify-backend";
 import { PlaybackTracker } from "./tracker";
 import type { HostTransport, TransportInfo } from "./transport";
 import type { JamState } from "./types";
@@ -27,6 +27,7 @@ export type ControllerOptions = {
   // Test seams.
   readPlayback?: () => Promise<PlaybackSnapshot | null>;
   search?: HostDeps["search"];
+  loadCollection?: HostDeps["loadCollection"];
 };
 
 export class JamController {
@@ -48,7 +49,8 @@ export class JamController {
     this.host = new JamHost(o.state, {
       now: Date.now,
       genId: () => globalThis.crypto.randomUUID(),
-      search: o.search ?? ((q) => searchTracks(o.tokens, q)),
+      search: o.search ?? ((q, kind) => searchCatalog(o.tokens, q, kind)),
+      loadCollection: o.loadCollection ?? ((kind, id, max) => loadCollection(o.tokens, kind, id, max)),
       send: (clientId, msg) => transport.send(clientId, JSON.stringify(msg satisfies ServerMessage)),
       broadcast: (msg) => transport.broadcast(JSON.stringify(msg satisfies ServerMessage)),
       close: (clientId) => transport.close(clientId),

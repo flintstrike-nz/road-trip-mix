@@ -6,10 +6,12 @@ import { useSession } from "next-auth/react";
 import { getHistoryStore } from "@/lib/history";
 import { JamController } from "@/lib/jam/controller";
 import { CapacitorHostTransport, SpotifyRemote, isNativeApp, nativePlayer } from "@/lib/jam/native";
-import { player, searchTracks } from "@/lib/jam/spotify-backend";
+import type { SearchKind } from "@/lib/jam/protocol";
+import { describeAdd } from "@/lib/jam/rules";
+import { player, searchCatalog } from "@/lib/jam/spotify-backend";
 import { loadJam, saveJam } from "@/lib/jam/storage";
 import { WebSocketHostTransport, type HostTransport, type TransportInfo } from "@/lib/jam/transport";
-import type { JamState, QueueEntry, TrackMeta } from "@/lib/jam/types";
+import type { CollectionMeta, JamState, LimitRule, QueueEntry, TrackMeta } from "@/lib/jam/types";
 import { setJamActive } from "@/lib/playback-recorder";
 import { sessionTokenSource } from "@/lib/session-token";
 import JoinPanel from "./JoinPanel";
@@ -24,6 +26,38 @@ function Art({ track }: { track: TrackMeta }) {
   return track.album.imageUrl ? <img src={track.album.imageUrl} alt="" width={40} height={40} className="jam__art" /> : <div className="jam__art" />;
 }
 
+// "Max songs per artist/album: [off | N] [in the queue | this session]"
+function LimitControl({ label, rule, onChange }: { label: string; rule: LimitRule; onChange: (r: LimitRule) => void }) {
+  return (
+    <div className="jam__radio">
+      <label>
+        <input
+          type="checkbox"
+          checked={rule.limit !== null}
+          onChange={(e) => onChange({ ...rule, limit: e.target.checked ? 2 : null })}
+        />{" "}
+        {label}
+      </label>
+      {rule.limit !== null && (
+        <>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={rule.limit}
+            aria-label={`${label} limit`}
+            onChange={(e) => onChange({ ...rule, limit: Number(e.target.value) || 1 })}
+          />
+          <select value={rule.scope} aria-label={`${label} scope`} onChange={(e) => onChange({ ...rule, scope: e.target.value === "queue" ? "queue" : "session" })}>
+            <option value="session">this session</option>
+            <option value="queue">in the queue</option>
+          </select>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function JamConsole({ id }: { id: string }) {
   const { data: session } = useSession();
   const [, bump] = useReducer((n: number) => n + 1, 0);
@@ -33,6 +67,9 @@ export default function JamConsole({ id }: { id: string }) {
   const [showJoin, setShowJoin] = useState(true);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<TrackMeta[]>([]);
+  const [collections, setCollections] = useState<CollectionMeta[]>([]);
+  const [kind, setKind] = useState<SearchKind>("track");
+  const [info2, setInfo2] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [remoteState, setRemoteState] = useState<"idle" | "connecting" | "connected">("idle");
@@ -80,17 +117,21 @@ export default function JamConsole({ id }: { id: string }) {
     const q = query.trim();
     if (q.length < 2) {
       setResults([]);
+      setCollections([]);
       return;
     }
     setSearching(true);
     const t = setTimeout(() => {
-      searchTracks(tokens, q)
-        .then(setResults)
+      searchCatalog(tokens, q, kind)
+        .then((r) => {
+          setResults(r.tracks);
+          setCollections(r.collections);
+        })
         .catch((e) => setActionError(e instanceof Error ? e.message : "Search failed."))
         .finally(() => setSearching(false));
     }, 350);
     return () => clearTimeout(t);
-  }, [query, tokens]);
+  }, [query, kind, tokens]);
 
   if (initial === undefined) return null;
   if (initial === null || !state) {
@@ -290,6 +331,18 @@ export default function JamConsole({ id }: { id: string }) {
                   </p>
                 </div>
                 <div className="jam__row-actions">
+                  <button className="jam__icon" aria-label={`Shuffle ${m.name}'s queue`} title="Shuffle queue" disabled={(state.queues[mid]?.length ?? 0) < 2} onClick={() => run(host?.shuffleQueue(me, mid))}>
+                    🔀
+                  </button>
+                  <button
+                    className="jam__icon"
+                    aria-label={`Clear ${m.name}'s queue`}
+                    title="Clear queue"
+                    disabled={(state.queues[mid]?.length ?? 0) === 0}
+                    onClick={() => confirm(`Clear ${m.name}'s ${state.queues[mid]?.length} queued songs?`) && run(host?.clearQueue(me, mid))}
+                  >
+                    🗑
+                  </button>
                   <button
                     className="jam__icon"
                     disabled={idx === 0}
@@ -328,7 +381,18 @@ export default function JamConsole({ id }: { id: string }) {
             );
           })}
 
-          <h3 className="jam__spaced">Settings</h3>
+          <h3 className="jam__spaced">Rules</h3>
+          <p className="jam__hint">Checked when songs are added; changing a rule doesn&apos;t remove what&apos;s already queued.</p>
+          <label className="jam__radio">
+            <input type="checkbox" checked={state.settings.noRepeats} onChange={(e) => host?.setSettings(me, { noRepeats: e.target.checked })} /> Each song plays
+            only once this session (can&apos;t be added again)
+          </label>
+          <label className="jam__radio">
+            <input type="checkbox" checked={state.settings.allowDuplicates} onChange={(e) => host?.setSettings(me, { allowDuplicates: e.target.checked })} /> Allow the same
+            song queued twice at once
+          </label>
+          <LimitControl label="Max songs per artist" rule={state.settings.maxPerArtist} onChange={(r) => host?.setSettings(me, { maxPerArtist: r })} />
+          <LimitControl label="Max songs per album" rule={state.settings.maxPerAlbum} onChange={(r) => host?.setSettings(me, { maxPerAlbum: r })} />
           <label className="jam__radio">
             Songs per person in queue
             <input
@@ -336,24 +400,29 @@ export default function JamConsole({ id }: { id: string }) {
               min={1}
               max={100}
               value={state.settings.maxQueuePerMember}
-              onChange={(e) => host?.setSettings(me, { maxQueuePerMember: Math.max(1, Math.min(100, Number(e.target.value) || 1)) })}
+              onChange={(e) => host?.setSettings(me, { maxQueuePerMember: Number(e.target.value) || 1 })}
             />
-          </label>
-          <label className="jam__radio">
-            <input
-              type="checkbox"
-              checked={state.settings.allowDuplicates}
-              onChange={(e) => host?.setSettings(me, { allowDuplicates: e.target.checked })}
-            />{" "}
-            Allow the same song twice
           </label>
         </section>
       </div>
 
       <section className="jam__section">
-        <h3>Add a song (your slot)</h3>
-        <input className="jam__search" placeholder="Search songs or artists" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <h3>Add to your queue</h3>
+        <div className="jam__tabs">
+          {(["track", "album", "playlist"] as SearchKind[]).map((k) => (
+            <button key={k} className={`jam__tab${kind === k ? " jam__tab--on" : ""}`} onClick={() => setKind(k)}>
+              {k === "track" ? "Songs" : k === "album" ? "Albums" : "Playlists"}
+            </button>
+          ))}
+        </div>
+        <input
+          className="jam__search"
+          placeholder={kind === "track" ? "Search songs or artists" : kind === "album" ? "Search albums" : "Search playlists"}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
         {searching && <p className="jam__muted">Searching…</p>}
+        {info2 && <p className="jam__hint">{info2}</p>}
         {results.map((t) => (
           <div key={t.id} className="jam__row">
             <Art track={t} />
@@ -371,11 +440,44 @@ export default function JamConsole({ id }: { id: string }) {
                 if (r?.ok) {
                   setQuery("");
                   setResults([]);
+                  setInfo2(null);
                 }
               }}
             >
               Add
             </button>
+          </div>
+        ))}
+        {collections.map((c) => (
+          <div key={c.id} className="jam__row">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {c.imageUrl ? <img src={c.imageUrl} alt="" width={40} height={40} className="jam__art" /> : <div className="jam__art" />}
+            <div className="jam__info">
+              <p className="jam__name">{c.name}</p>
+              <p className="jam__meta">
+                {c.subtitle}
+                {c.trackCount ? ` · ${c.trackCount} songs` : ""}
+              </p>
+            </div>
+            <div className="jam__row-actions">
+              {[false, true].map((shuffle) => (
+                <button
+                  key={String(shuffle)}
+                  className={shuffle ? "jam__icon" : "jam__btn"}
+                  title={shuffle ? "Add shuffled" : "Add all"}
+                  aria-label={shuffle ? "Add shuffled" : "Add all"}
+                  onClick={() =>
+                    guard(async () => {
+                      setInfo2(`Adding ${c.name}…`);
+                      const r = await host!.addCollection(me, c.kind, c.id, shuffle);
+                      setInfo2(describeAdd(r.added, r.skipped));
+                    })
+                  }
+                >
+                  {shuffle ? "🔀" : "Add all"}
+                </button>
+              ))}
+            </div>
           </div>
         ))}
       </section>

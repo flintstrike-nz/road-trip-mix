@@ -46,3 +46,6 @@
 .jam__code strong { font-size: 1.5rem; letter-spacing: 0.15em; color: var(--text-bright-accent); }
 .jam__webplayer { margin-top: 12px; }
 .jam code { background: #2a2a2a; padding: 1px 5px; border-radius: 4px; }
+.jam__tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+.jam__tab { padding: 6px 14px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.25); color: var(--text-subdued); background: none; font-size: 0.875rem; cursor: pointer; }
+.jam__tab--on { background: var(--text-base); color: #000; border-color: var(--text-base); font-weight: 700; }

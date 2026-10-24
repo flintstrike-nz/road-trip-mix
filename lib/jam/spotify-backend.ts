@@ -1,5 +1,7 @@
 import { spotifyFetch, type TokenSource } from "../spotify-api";
-import type { TrackMeta } from "./types";
+import type { SearchKind } from "./protocol";
+import type { SearchResults } from "./host";
+import type { CollectionMeta, TrackMeta } from "./types";
 
 // Spotify Web API calls the jam host needs: track search (on behalf of
 // joiners, who have no Spotify access of their own) and playback state.
@@ -45,11 +47,93 @@ export function mapTrack(raw: RawTrack | null | undefined): TrackMeta | null {
   };
 }
 
-export async function searchTracks(tokens: TokenSource, query: string): Promise<TrackMeta[]> {
-  const res = await spotifyFetch(tokens, `/search?type=track&limit=10&q=${encodeURIComponent(query)}`);
+type RawAlbum = {
+  id?: string;
+  name?: string;
+  release_date?: string;
+  total_tracks?: number;
+  artists?: { id?: string; name?: string }[];
+  images?: { url: string }[];
+};
+
+type RawPlaylist = {
+  id?: string;
+  name?: string;
+  owner?: { display_name?: string };
+  images?: { url: string }[];
+  tracks?: { total?: number };
+  items?: { total?: number };
+};
+
+const smallImage = (images?: { url: string }[]) => images?.[images.length > 1 ? 1 : 0]?.url;
+
+export function mapAlbum(a: RawAlbum | null | undefined): CollectionMeta | null {
+  if (!a?.id || !a.name) return null;
+  const artists = (a.artists ?? []).map((x) => x.name).filter(Boolean).join(", ");
+  const year = a.release_date?.slice(0, 4);
+  return {
+    kind: "album",
+    id: a.id,
+    name: a.name,
+    subtitle: [artists, year].filter(Boolean).join(" · "),
+    imageUrl: smallImage(a.images),
+    trackCount: a.total_tracks,
+  };
+}
+
+// Search results can contain nulls for playlists Spotify has removed.
+export function mapPlaylist(p: RawPlaylist | null | undefined): CollectionMeta | null {
+  if (!p?.id || !p.name) return null;
+  return {
+    kind: "playlist",
+    id: p.id,
+    name: p.name,
+    subtitle: p.owner?.display_name ? `by ${p.owner.display_name}` : "Playlist",
+    imageUrl: smallImage(p.images),
+    trackCount: p.tracks?.total ?? p.items?.total,
+  };
+}
+
+export async function searchCatalog(tokens: TokenSource, query: string, kind: SearchKind = "track"): Promise<SearchResults> {
+  const res = await spotifyFetch(tokens, `/search?type=${kind}&limit=10&q=${encodeURIComponent(query)}`);
   const data = await res.json();
+  if (kind === "album") {
+    const items: RawAlbum[] = data?.albums?.items ?? [];
+    return { tracks: [], collections: items.map(mapAlbum).filter((c): c is CollectionMeta => c !== null) };
+  }
+  if (kind === "playlist") {
+    const items: (RawPlaylist | null)[] = data?.playlists?.items ?? [];
+    return { tracks: [], collections: items.map(mapPlaylist).filter((c): c is CollectionMeta => c !== null) };
+  }
   const items: RawTrack[] = data?.tracks?.items ?? [];
-  return items.map(mapTrack).filter((t): t is TrackMeta => t !== null);
+  return { tracks: items.map(mapTrack).filter((t): t is TrackMeta => t !== null), collections: [] };
+}
+
+export async function searchTracks(tokens: TokenSource, query: string): Promise<TrackMeta[]> {
+  return (await searchCatalog(tokens, query, "track")).tracks;
+}
+
+// Album track listings are "simplified" (no album object), so the album's own
+// details are folded into each track.
+export async function fetchAlbumTracks(tokens: TokenSource, albumId: string, max = 100): Promise<TrackMeta[]> {
+  const albumRes = await spotifyFetch(tokens, `/albums/${albumId}`);
+  const album: RawAlbum = await albumRes.json();
+  const out: TrackMeta[] = [];
+  for (let offset = 0; out.length < max; offset += 50) {
+    const res = await spotifyFetch(tokens, `/albums/${albumId}/tracks?limit=50&offset=${offset}`);
+    const data = await res.json();
+    const items: RawTrack[] = data.items ?? [];
+    for (const it of items) {
+      const t = mapTrack({ ...it, album });
+      if (t) out.push(t);
+    }
+    if (offset + 50 >= (data.total ?? 0) || items.length === 0) break;
+  }
+  return out.slice(0, max);
+}
+
+export async function loadCollection(tokens: TokenSource, kind: "album" | "playlist", id: string, max = 100): Promise<TrackMeta[]> {
+  return kind === "album" ? fetchAlbumTracks(tokens, id, max) : fetchPlaylistTracks(tokens, id, max);
 }
 
 export type PlaybackSnapshot = {
@@ -79,9 +163,9 @@ export async function getPlayback(tokens: TokenSource): Promise<PlaybackSnapshot
 export const playlistUri = (id: string) => `spotify:playlist:${id}`;
 
 // Full track list of a playlist (all pages), with whatever metadata Spotify returns.
-export async function fetchPlaylistTracks(tokens: TokenSource, playlistId: string): Promise<TrackMeta[]> {
+export async function fetchPlaylistTracks(tokens: TokenSource, playlistId: string, max = Infinity): Promise<TrackMeta[]> {
   const out: TrackMeta[] = [];
-  for (let offset = 0; ; offset += 50) {
+  for (let offset = 0; out.length < max; offset += 50) {
     const res = await spotifyFetch(tokens, `/playlists/${playlistId}/items?limit=50&offset=${offset}`);
     const data = await res.json();
     const items: { item: RawTrack | null }[] = data.items ?? [];
@@ -91,7 +175,7 @@ export async function fetchPlaylistTracks(tokens: TokenSource, playlistId: strin
     }
     if (offset + 50 >= (data.total ?? 0) || items.length === 0) break;
   }
-  return out;
+  return Number.isFinite(max) ? out.slice(0, max) : out;
 }
 
 export async function createPlaylist(tokens: TokenSource, name: string): Promise<string> {

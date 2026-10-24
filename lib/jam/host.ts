@@ -1,12 +1,16 @@
-import { parseClientMessage, type ClientMessage, type ErrorCode, type ServerMessage } from "./protocol";
+import { parseClientMessage, type ClientMessage, type ErrorCode, type SearchKind, type ServerMessage } from "./protocol";
+import { checkAdd, playedEntry, type SkipReason } from "./rules";
 import { buildUpcoming } from "./schedule";
 import type {
   BaseEntry,
+  CollectionMeta,
   JamSettings,
   JamState,
+  LimitRule,
   Member,
   PublicJamState,
   QueueEntry,
+  RuleSettings,
   ScheduledItem,
   TrackMeta,
 } from "./types";
@@ -25,12 +29,20 @@ export const MEMBER_COLORS = [
 
 const PUBLIC_UPCOMING_LIMIT = 60;
 const SEARCH_MIN_INTERVAL_MS = 400;
+const COLLECTION_MIN_INTERVAL_MS = 1500;
+const MAX_COLLECTION_TRACKS = 100;
+const MAX_PLAYED_LOG = 2000;
 const JOIN_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
+
+export type SearchResults = { tracks: TrackMeta[]; collections: CollectionMeta[] };
 
 export type HostDeps = {
   now: () => number;
   genId: () => string;
-  search?: (query: string) => Promise<TrackMeta[]>;
+  random?: () => number; // injectable for tests; defaults to Math.random
+  search?: (query: string, kind: SearchKind) => Promise<SearchResults>;
+  // Resolves an album or playlist to its tracks (at most `max`).
+  loadCollection?: (kind: "album" | "playlist", id: string, max: number) => Promise<TrackMeta[]>;
   send: (clientId: string, msg: ServerMessage) => void;
   broadcast: (msg: ServerMessage) => void;
   close?: (clientId: string) => void;
@@ -40,6 +52,16 @@ export type HostDeps = {
 export type ActionResult =
   | { ok: true; entryId?: string }
   | { ok: false; code: ErrorCode; message: string };
+
+export type AddSummary = { added: number; skipped: { reason: SkipReason; count: number }[] };
+
+const RULE_CODE: Record<SkipReason, ErrorCode> = {
+  repeat: "rule-repeat",
+  duplicate: "duplicate",
+  artist: "rule-artist",
+  album: "rule-album",
+  full: "queue-full",
+};
 
 const fail = (code: ErrorCode, message: string): ActionResult => ({ ok: false, code, message });
 
@@ -81,6 +103,9 @@ export function createJamState(opts: CreateJamOptions, deps: Pick<HostDeps, "now
     settings: {
       maxQueuePerMember: 25,
       allowDuplicates: false,
+      noRepeats: false,
+      maxPerArtist: { limit: null, scope: "session" },
+      maxPerAlbum: { limit: null, scope: "session" },
       joinCode: randomJoinCode(),
       ...opts.settings,
     },
@@ -88,6 +113,7 @@ export function createJamState(opts: CreateJamOptions, deps: Pick<HostDeps, "now
     members: { [hostMemberId]: host },
     devices: {},
     banned: [],
+    played: [],
     queues: { [hostMemberId]: [] },
     lastRound: { [hostMemberId]: -1 },
     cursor: null,
@@ -109,6 +135,9 @@ export function toPublicState(state: JamState, limit = PUBLIC_UPCOMING_LIMIT): P
     settings: {
       maxQueuePerMember: state.settings.maxQueuePerMember,
       allowDuplicates: state.settings.allowDuplicates,
+      noRepeats: state.settings.noRepeats,
+      maxPerArtist: state.settings.maxPerArtist,
+      maxPerAlbum: state.settings.maxPerAlbum,
     },
     memberOrder: state.memberOrder,
     members: state.members,
@@ -123,12 +152,20 @@ export class JamHost {
   private state: JamState;
   private clientToMember = new Map<string, string>();
   private lastSearchAt = new Map<string, number>();
+  private lastCollectionAt = new Map<string, number>();
 
   constructor(state: JamState, private deps: HostDeps) {
     // A restored session starts with everyone offline until they reconnect.
     this.state = {
       ...state,
       devices: state.devices ?? {},
+      played: state.played ?? [],
+      settings: {
+        ...state.settings,
+        noRepeats: state.settings.noRepeats ?? false,
+        maxPerArtist: state.settings.maxPerArtist ?? { limit: null, scope: "session" },
+        maxPerAlbum: state.settings.maxPerAlbum ?? { limit: null, scope: "session" },
+      },
       banned: state.banned ?? [],
       playlistLocked: state.playlistLocked ?? 0,
       members: Object.fromEntries(
@@ -159,6 +196,7 @@ export class JamHost {
     const memberId = this.clientToMember.get(clientId);
     this.clientToMember.delete(clientId);
     this.lastSearchAt.delete(clientId);
+    this.lastCollectionAt.delete(clientId);
     if (!memberId) return;
     // A member can have a second live connection (tab reopened); only mark
     // offline when none are left.
@@ -205,7 +243,16 @@ export class JamHost {
         this.reply(clientId, this.rename(memberId, msg.name));
         break;
       case "search":
-        void this.runSearch(clientId, msg.reqId, msg.q);
+        void this.runSearch(clientId, msg.reqId, msg.q, msg.kind);
+        break;
+      case "add-collection":
+        void this.runAddCollection(clientId, memberId, msg);
+        break;
+      case "clear":
+        this.reply(clientId, this.clearQueue(memberId, memberId));
+        break;
+      case "shuffle":
+        this.reply(clientId, this.shuffleQueue(memberId, memberId));
         break;
     }
   }
@@ -264,17 +311,12 @@ export class JamHost {
   addTrack(memberId: string, track: TrackMeta, index?: number): ActionResult {
     const s = this.state;
     if (!s.members[memberId]) return fail("not-joined", "Join the session first.");
-    const queue = s.queues[memberId] ?? [];
-    if (queue.length >= s.settings.maxQueuePerMember) {
+    if ((s.queues[memberId] ?? []).length >= s.settings.maxQueuePerMember) {
       return fail("queue-full", `Your queue is full (${s.settings.maxQueuePerMember} songs).`);
     }
-    if (!s.settings.allowDuplicates) {
-      const dupe = Object.values(s.queues).flat().find((e) => e.track.id === track.id);
-      if (dupe) {
-        const who = s.members[dupe.memberId]?.name ?? "someone";
-        return fail("duplicate", `Already queued by ${who}.`);
-      }
-    }
+    const rule = checkAdd(s, track);
+    if (!rule.ok) return fail(RULE_CODE[rule.reason], rule.message);
+
     const entry: QueueEntry = { id: this.deps.genId(), memberId, track, addedAt: this.deps.now() };
     this.mutate((st) => {
       const q = [...(st.queues[memberId] ?? [])];
@@ -283,6 +325,64 @@ export class JamHost {
       st.queues[memberId] = q;
     });
     return { ok: true, entryId: entry.id };
+  }
+
+  // Adds as many of `tracks` as the rules and the queue limit allow, in order,
+  // in a single update. Each track is checked against the ones accepted before
+  // it, so e.g. a per-artist limit applies within the batch too.
+  addMany(memberId: string, tracks: TrackMeta[]): AddSummary | { error: ActionResult & { ok: false } } {
+    if (!this.state.members[memberId]) return { error: fail("not-joined", "Join the session first.") as ActionResult & { ok: false } };
+    const accepted: QueueEntry[] = [];
+    const skipped = new Map<SkipReason, number>();
+    const skip = (r: SkipReason) => skipped.set(r, (skipped.get(r) ?? 0) + 1);
+
+    let view = this.state;
+    for (const track of tracks) {
+      if ((view.queues[memberId] ?? []).length >= view.settings.maxQueuePerMember) {
+        skip("full");
+        continue;
+      }
+      const rule = checkAdd(view, track);
+      if (!rule.ok) {
+        skip(rule.reason);
+        continue;
+      }
+      const entry: QueueEntry = { id: this.deps.genId(), memberId, track, addedAt: this.deps.now() };
+      accepted.push(entry);
+      view = { ...view, queues: { ...view.queues, [memberId]: [...(view.queues[memberId] ?? []), entry] } };
+    }
+    if (accepted.length > 0) {
+      this.mutate((st) => {
+        st.queues[memberId] = [...(st.queues[memberId] ?? []), ...accepted];
+      });
+    }
+    return { added: accepted.length, skipped: Array.from(skipped.entries()).map(([reason, count]) => ({ reason, count })) };
+  }
+
+  clearQueue(actorId: string, memberId: string): ActionResult {
+    if (!this.state.members[memberId]) return fail("not-found", "No such member.");
+    if (actorId !== memberId && actorId !== this.state.hostMemberId) return fail("forbidden", "You can only edit your own queue.");
+    if ((this.state.queues[memberId] ?? []).length === 0) return { ok: true };
+    this.mutate((st) => {
+      st.queues[memberId] = [];
+    });
+    return { ok: true };
+  }
+
+  shuffleQueue(actorId: string, memberId: string): ActionResult {
+    if (!this.state.members[memberId]) return fail("not-found", "No such member.");
+    if (actorId !== memberId && actorId !== this.state.hostMemberId) return fail("forbidden", "You can only edit your own queue.");
+    const q = [...(this.state.queues[memberId] ?? [])];
+    if (q.length < 2) return { ok: true };
+    const rand = this.deps.random ?? Math.random;
+    for (let i = q.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [q[i], q[j]] = [q[j], q[i]];
+    }
+    this.mutate((st) => {
+      st.queues[memberId] = q;
+    });
+    return { ok: true };
   }
 
   private findEntry(entryId: string): QueueEntry | undefined {
@@ -367,10 +467,23 @@ export class JamHost {
     return { ok: true };
   }
 
-  setSettings(actorId: string, patch: Partial<Pick<JamSettings, "maxQueuePerMember" | "allowDuplicates">>): ActionResult {
+  setSettings(actorId: string, patch: Partial<RuleSettings>): ActionResult {
     if (actorId !== this.state.hostMemberId) return fail("forbidden", "Only the host can change settings.");
+    const clampLimit = (r: LimitRule | undefined, current: LimitRule): LimitRule => {
+      if (!r) return current;
+      const limit = r.limit === null ? null : Math.max(1, Math.min(50, Math.floor(Number(r.limit)) || 1));
+      return { limit, scope: r.scope === "queue" ? "queue" : "session" };
+    };
     this.mutate((st) => {
-      st.settings = { ...st.settings, ...patch };
+      const cur = st.settings;
+      st.settings = {
+        ...cur,
+        ...(patch.maxQueuePerMember !== undefined && { maxQueuePerMember: Math.max(1, Math.min(100, Math.floor(patch.maxQueuePerMember) || 1)) }),
+        ...(patch.allowDuplicates !== undefined && { allowDuplicates: !!patch.allowDuplicates }),
+        ...(patch.noRepeats !== undefined && { noRepeats: !!patch.noRepeats }),
+        maxPerArtist: clampLimit(patch.maxPerArtist, cur.maxPerArtist),
+        maxPerAlbum: clampLimit(patch.maxPerAlbum, cur.maxPerAlbum),
+      };
     });
     return { ok: true };
   }
@@ -412,35 +525,71 @@ export class JamHost {
         st.base = st.base.filter((b) => b.id !== item.entryId);
       }
       st.nowPlaying = playing;
+      st.played = [...st.played, playedEntry(track, playing.memberId, this.deps.now())].slice(-MAX_PLAYED_LOG);
     });
     return playing;
   }
 
   // --- search --------------------------------------------------------------
 
-  private async runSearch(clientId: string, reqId: string, q: string): Promise<void> {
+  private tooFast(log: Map<string, number>, clientId: string, minMs: number): boolean {
     const now = this.deps.now();
-    const last = this.lastSearchAt.get(clientId) ?? 0;
-    if (now - last < SEARCH_MIN_INTERVAL_MS) {
-      this.deps.send(clientId, { t: "search-result", reqId, tracks: [], error: "Searching too fast." });
+    const last = log.get(clientId) ?? -Infinity;
+    if (now - last < minMs) return true;
+    log.set(clientId, now);
+    return false;
+  }
+
+  private async runSearch(clientId: string, reqId: string, q: string, kind: SearchKind): Promise<void> {
+    const empty = { t: "search-result" as const, reqId, kind, tracks: [], collections: [] };
+    if (this.tooFast(this.lastSearchAt, clientId, SEARCH_MIN_INTERVAL_MS)) {
+      this.deps.send(clientId, { ...empty, error: "Searching too fast." });
       return;
     }
-    this.lastSearchAt.set(clientId, now);
     if (!this.deps.search) {
-      this.deps.send(clientId, { t: "search-result", reqId, tracks: [], error: "Search isn't available on the host." });
+      this.deps.send(clientId, { ...empty, error: "Search isn't available on the host." });
       return;
     }
     try {
-      const tracks = await this.deps.search(q);
-      this.deps.send(clientId, { t: "search-result", reqId, tracks });
+      const res = await this.deps.search(q, kind);
+      this.deps.send(clientId, { ...empty, tracks: res.tracks, collections: res.collections });
     } catch (e) {
-      this.deps.send(clientId, {
-        t: "search-result",
-        reqId,
-        tracks: [],
-        error: e instanceof Error ? e.message : "Search failed.",
-      });
+      this.deps.send(clientId, { ...empty, error: e instanceof Error ? e.message : "Search failed." });
     }
+  }
+
+  private async runAddCollection(
+    clientId: string,
+    memberId: string,
+    msg: Extract<ClientMessage, { t: "add-collection" }>
+  ): Promise<void> {
+    const fail = (error: string) => this.deps.send(clientId, { t: "add-result", reqId: msg.reqId, added: 0, skipped: [], error });
+    if (this.tooFast(this.lastCollectionAt, clientId, COLLECTION_MIN_INTERVAL_MS)) return fail("Slow down a moment.");
+    if (!this.deps.loadCollection) return fail("Adding albums and playlists isn't available on the host.");
+    try {
+      const result = await this.addCollection(memberId, msg.kind, msg.id, msg.shuffle === true);
+      this.deps.send(clientId, { t: "add-result", reqId: msg.reqId, ...result });
+    } catch (e) {
+      fail(e instanceof Error ? e.message : "Couldn't load that.");
+    }
+  }
+
+  // Expands an album or playlist into the member's queue (optionally shuffled
+  // first), applying the same rules as single adds.
+  async addCollection(memberId: string, kind: "album" | "playlist", id: string, shuffle = false): Promise<AddSummary> {
+    if (!this.deps.loadCollection) throw new Error("Adding albums and playlists isn't available.");
+    let tracks = await this.deps.loadCollection(kind, id, MAX_COLLECTION_TRACKS);
+    tracks = tracks.slice(0, MAX_COLLECTION_TRACKS);
+    if (shuffle) {
+      const rand = this.deps.random ?? Math.random;
+      for (let i = tracks.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [tracks[i], tracks[j]] = [tracks[j], tracks[i]];
+      }
+    }
+    const r = this.addMany(memberId, tracks);
+    if ("error" in r) throw new Error(r.error.message);
+    return r;
   }
 
   // --- internals -----------------------------------------------------------

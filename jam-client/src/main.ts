@@ -1,5 +1,6 @@
-import type { ClientMessage, ServerMessage } from "../../lib/jam/protocol";
-import type { PublicJamState, QueueEntry, ScheduledItem, TrackMeta } from "../../lib/jam/types";
+import type { ClientMessage, SearchKind, ServerMessage } from "../../lib/jam/protocol";
+import { describeAdd, describeRules } from "../../lib/jam/rules";
+import type { CollectionMeta, PublicJamState, QueueEntry, ScheduledItem, TrackMeta } from "../../lib/jam/types";
 import { formatDuration, isNewer, moveInQueue, parseJoinCode } from "./model";
 import { makeSortable } from "./sortable";
 
@@ -33,11 +34,15 @@ let name = store.get("jam.name") ?? "";
 let code = parseJoinCode(location) || store.get("jam.code") || "";
 let status: "joining" | "online" | "offline" | "kicked" = "joining";
 let notice = "";
+let noticeKind: "error" | "info" = "error";
 let view: View = "queue";
 let dragging = false;
 let pendingRender = false;
 let searchUi: { fill: () => void } | null = null;
 let searchResults: TrackMeta[] = [];
+let searchCollections: CollectionMeta[] = [];
+let searchKind: SearchKind = "track";
+let addReq = 0;
 let searchError = "";
 let searchReq = 0;
 let retry = 0;
@@ -87,6 +92,12 @@ function connect() {
   };
 }
 
+function toast(text: string, kind: "error" | "info" = "error") {
+  notice = text;
+  noticeKind = kind;
+  setTimeout(() => { if (notice === text) { notice = ""; render(); } }, kind === "info" ? 6000 : 4000);
+}
+
 function onServer(msg: ServerMessage) {
   switch (msg.t) {
     case "welcome":
@@ -100,16 +111,23 @@ function onServer(msg: ServerMessage) {
       if (isNewer(state, msg.state)) state = msg.state;
       break;
     case "error":
-      notice = msg.message;
+      toast(msg.message);
       if (msg.code === "bad-code" || msg.code === "banned") status = "joining";
       if (msg.code === "banned") status = "kicked";
-      setTimeout(() => { if (notice === msg.message) { notice = ""; render(); } }, 4000);
       break;
     case "search-result":
       if (msg.reqId === String(searchReq)) {
         searchResults = msg.tracks;
+        searchCollections = msg.collections;
         searchError = msg.error ?? "";
         searchUi?.fill();
+      }
+      break;
+    case "add-result":
+      if (msg.reqId === String(addReq)) {
+        if (msg.error) toast(msg.error);
+        else toast(describeAdd(msg.added, msg.skipped), msg.added > 0 ? "info" : "error");
+        searchUi && closeSearch();
       }
       break;
     case "kicked":
@@ -190,11 +208,15 @@ function myQueueView(s: PublicJamState): HTMLElement {
     dragging = d;
     if (!d && pendingRender) { pendingRender = false; render(); }
   });
+  const tools = mine.length > 1 ? h("div", { class: "tools" },
+    h("button", { class: "chip", onclick: () => send({ t: "shuffle" }) }, "🔀 Shuffle"),
+    h("button", { class: "chip", onclick: () => { if (confirm(`Remove all ${mine.length} songs from your queue?`)) send({ t: "clear" }); } }, "Clear all")) : null;
   return h("div", {},
     h("div", { class: "section-head" },
       h("h2", {}, `My queue (${mine.length}/${s.settings.maxQueuePerMember})`),
-      h("button", { class: "primary small", onclick: openSearch }, "+ Add song")),
-    mine.length ? list : h("p", { class: "muted" }, "Nothing queued. Add a song and it goes into the next round."));
+      h("button", { class: "primary small", onclick: openSearch }, "+ Add")),
+    ...(tools ? [tools] : []),
+    mine.length ? list : h("p", { class: "muted" }, "Nothing queued. Add songs, an album or a playlist — they go into the next round."));
 }
 
 function nextView(s: PublicJamState): HTMLElement {
@@ -213,14 +235,26 @@ function peopleView(s: PublicJamState): HTMLElement {
       h("div", { class: "title" }, m.name + (id === myId ? " (you)" : "") + (m.isHost ? " · host" : "")),
       h("div", { class: "sub" }, `${s.queues[id]?.length ?? 0} queued · ${m.online ? "online" : "offline"}`)));
   });
-  return h("div", {}, h("h2", {}, "In the rotation"), h("ul", { class: "list" }, ...rows));
+  return h("div", {}, h("h2", {}, "In the rotation"), h("ul", { class: "list" }, ...rows),
+    h("h2", { class: "spaced" }, "House rules"),
+    h("ul", { class: "rules" }, ...describeRules(s.settings).map((r) => h("li", {}, r))));
 }
 
 function closeSearch() {
   searchUi = null;
   searchResults = [];
+  searchCollections = [];
   searchError = "";
   sheetRoot.replaceChildren();
+}
+
+const KIND_LABEL: Record<SearchKind, string> = { track: "Songs", album: "Albums", playlist: "Playlists" };
+
+function addCollection(c: CollectionMeta, shuffle: boolean) {
+  addReq++;
+  send({ t: "add-collection", reqId: String(addReq), kind: c.kind, id: c.id, shuffle });
+  toast(`Adding ${c.name}…`, "info");
+  render();
 }
 
 // The sheet lives outside #app so re-renders (every host snapshot) never
@@ -228,28 +262,60 @@ function closeSearch() {
 function openSearch() {
   let timer: ReturnType<typeof setTimeout>;
   const results = h("ul", { class: "list" });
+  const input = h("input", { type: "search", placeholder: "Search", autofocus: true });
+  const rulesHint = h("p", { class: "muted small" }, state ? describeRules(state.settings).slice(0, -1).join(" · ") : "");
+
   const fill = () => {
     if (searchError) { results.replaceChildren(h("li", { class: "error" }, searchError)); return; }
-    results.replaceChildren(...searchResults.map((t) =>
-      h("li", { class: "row" }, art(t), trackInfo(t, formatDuration(t.durationMs)),
-        h("button", { class: "primary small", onclick: () => { send({ t: "add", track: t }); closeSearch(); } }, "Add"))));
+    const rows: HTMLElement[] = searchKind === "track"
+      ? searchResults.map((t) =>
+          h("li", { class: "row" }, art(t), trackInfo(t, formatDuration(t.durationMs)),
+            h("button", { class: "primary small", onclick: () => { send({ t: "add", track: t }); closeSearch(); } }, "Add")))
+      : searchCollections.map((c) =>
+          h("li", { class: "row collection" }, collectionArt(c),
+            h("div", { class: "info" }, h("div", { class: "title" }, c.name),
+              h("div", { class: "sub" }, c.subtitle + (c.trackCount ? ` · ${c.trackCount} songs` : ""))),
+            h("div", { class: "actions" },
+              h("button", { class: "primary small", onclick: () => addCollection(c, false) }, "Add all"),
+              h("button", { class: "chip", "aria-label": "Add shuffled", title: "Add shuffled", onclick: () => addCollection(c, true) }, "🔀"))));
+    results.replaceChildren(...rows);
   };
-  const input = h("input", { type: "search", placeholder: "Search songs or artists", autofocus: true });
-  input.addEventListener("input", () => {
+
+  const run = () => {
     clearTimeout(timer);
     const q = input.value.trim();
-    if (q.length < 2) { searchResults = []; searchError = ""; fill(); return; }
+    searchResults = []; searchCollections = []; searchError = "";
+    fill();
+    if (q.length < 2) return;
     timer = setTimeout(() => {
       searchReq++;
-      send({ t: "search", reqId: String(searchReq), q });
+      send({ t: "search", reqId: String(searchReq), q, kind: searchKind });
     }, 350);
-  });
+  };
+  input.addEventListener("input", run);
+
+  const tabs = h("div", { class: "tabs-inline" },
+    ...(["track", "album", "playlist"] as SearchKind[]).map((k) => {
+      const b = h("button", { class: "tab" + (searchKind === k ? " active" : ""), onclick: () => {
+        searchKind = k;
+        tabs.querySelectorAll("button").forEach((el, i) => el.classList.toggle("active", ["track", "album", "playlist"][i] === k));
+        input.placeholder = k === "track" ? "Search songs or artists" : k === "album" ? "Search albums" : "Search playlists";
+        run();
+      } }, KIND_LABEL[k]);
+      return b;
+    }));
+  input.placeholder = "Search songs or artists";
+
   searchUi = { fill };
   fill();
   sheetRoot.replaceChildren(h("div", { class: "sheet" },
-    h("div", { class: "section-head" }, h("h2", {}, "Add a song"), h("button", { class: "icon", "aria-label": "Close", onclick: closeSearch }, "✕")),
-    input, results));
+    h("div", { class: "section-head" }, h("h2", {}, "Add to your queue"), h("button", { class: "icon", "aria-label": "Close", onclick: closeSearch }, "✕")),
+    tabs, input, rulesHint, results));
   input.focus();
+}
+
+function collectionArt(c: CollectionMeta): HTMLElement {
+  return c.imageUrl && c.imageUrl.startsWith("https://") ? h("img", { class: "art", src: c.imageUrl, alt: "", loading: "lazy" }) : h("div", { class: "art" });
 }
 
 function render() {
@@ -270,7 +336,7 @@ function render() {
       h("div", { class: "conn " + status }, status === "online" ? "● live" : "● reconnecting…")),
     nowPlaying(state),
     h("nav", {}, ...tabs),
-    ...(notice ? [h("div", { class: "toast" }, notice)] : []),
+    ...(notice ? [h("div", { class: "toast" + (noticeKind === "info" ? " info" : "") }, notice)] : []),
     h("main", {}, body));
 }
 
