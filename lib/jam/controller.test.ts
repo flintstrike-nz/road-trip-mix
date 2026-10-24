@@ -142,3 +142,24 @@ describe("songs played from somewhere other than the jam playlist", () => {
     expect(c.host.getState().queues.host).toHaveLength(0);
   });
 });
+
+describe("a queued song that gets played from another playlist", () => {
+  it("doesn't move the playlist lock, so the entry can still be edited and isn't duplicated", async () => {
+    const sp = fakeSpotify([uri("f1"), uri("f2")]);
+    let current: PlaybackSnapshot | null = null;
+    const { c } = await start({ base: [track("f1"), track("f2")], readPlayback: async () => current });
+    const added = c.host.addTrack("host", track("q1"));
+    await vi.waitFor(() => expect(sp.pl.uris).toEqual([uri("q1"), uri("f1"), uri("f2")]));
+
+    // The family plays q1 from search results, not from the jam playlist.
+    current = snap(track("q1"), "spotify:playlist:OTHER");
+    await vi.waitFor(() => expect(c.host.getState().nowPlaying?.track.id).toBe(track("q1").id));
+    await settle(200);
+    expect(sp.pl.uris).toEqual([uri("q1"), uri("f1"), uri("f2")]); // no duplicate of q1
+    expect(c.host.getState().playlistLocked).toBe(0); // lock didn't jump over unplayed tracks
+
+    // and it's still editable: removing it from the queue removes it from the playlist
+    c.host.removeEntry("host", added.ok ? added.entryId! : "");
+    await vi.waitFor(() => expect(sp.pl.uris).toEqual([uri("f1"), uri("f2")]));
+  });
+});

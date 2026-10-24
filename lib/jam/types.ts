@@ -132,6 +132,9 @@ export type ScheduledItem = {
   track: TrackMeta;
   memberId: string | null; // null for filler from the base playlist
   round: number | null;
+  // Set when it played from somewhere other than the jam playlist, so it says nothing about
+  // where the jam playlist has got to.
+  external?: boolean;
 };
 
 // The state sent to joiners: same thing, but with the derived schedule and

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import net from "node:net";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -121,6 +122,17 @@ describe("relay", () => {
   it("answers a malformed URL with 400 instead of crashing", async () => {
     expect((await rawGet(relay.port, "/%ZZ")).status).toBe(400);
     expect((await rawGet(relay.port, "/")).status).toBe(200); // still serving
+  });
+
+  it("survives a WebSocket upgrade request with an unparseable target", async () => {
+    await new Promise<void>((resolve) => {
+      const sock = net.connect(relay.port, "127.0.0.1", () => {
+        sock.write("GET //[ HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+      });
+      sock.on("error", () => resolve());
+      sock.on("close", () => resolve());
+    });
+    expect((await rawGet(relay.port, "/")).status).toBe(200); // relay still up
   });
 
   it("survives a joiner sending an oversized frame, and carries large host messages", async () => {

@@ -517,7 +517,7 @@ export class JamHost {
 
     const upcoming = opts.external ? [] : buildUpcoming(s);
     const item = upcoming.find((u) => u.track.id === track.id);
-    const playing: ScheduledItem = item ?? { entryId: `ext:${track.id}:${this.deps.now()}`, track, memberId: null, round: null };
+    const playing: ScheduledItem = item ?? { entryId: `ext:${track.id}:${this.deps.now()}`, track, memberId: null, round: null, ...(opts.external && { external: true }) };
 
     this.mutate((st) => {
       if (item?.memberId) {

@@ -50,3 +50,6 @@ export function buildUpcoming(state: JamState): ScheduledItem[] {
 export function peekNext(state: JamState): ScheduledItem | null {
   return buildUpcoming(state)[0] ?? null;
 }
+
+// True for something that played from outside the jam playlist (see JamHost.trackStarted).
+export const isExternalItem = (item: ScheduledItem): boolean => item.external === true;

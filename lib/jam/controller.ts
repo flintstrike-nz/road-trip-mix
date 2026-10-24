@@ -3,6 +3,7 @@ import type { TokenSource } from "../spotify-api";
 import { lockedCount, syncPlaylistLive } from "../spotify-sync";
 import { JamHost, type HostDeps } from "./host";
 import type { ServerMessage } from "./protocol";
+import { isExternalItem } from "./schedule";
 import { getPlayback, loadCollection, playlistUri, searchCatalog, type PlaybackSnapshot } from "./spotify-backend";
 import { PlaybackTracker } from "./tracker";
 import type { HostTransport, TransportInfo } from "./transport";
@@ -162,7 +163,9 @@ export class JamController {
     this.setSync({ ...this.syncStatus, state: "syncing" });
     try {
       const upcoming = this.host.upcoming().map((u) => u.track.uri);
-      const playingUri = s.nowPlaying?.track.uri ?? null;
+      // Only a song playing from the jam playlist says where we are in it. Something played from
+      // elsewhere may share a URI with an unplayed track here, and must not move the lock.
+      const playingUri = s.nowPlaying && !isExternalItem(s.nowPlaying) ? s.nowPlaying.track.uri : null;
       await syncPlaylistLive(this.o.tokens, playlistId, upcoming, (uris) => {
         // Lock through the playing song when it's in the playlist; if something
         // else is playing, keep the last known lock so history isn't rewritten.

@@ -97,7 +97,14 @@ export async function startRelay(opts: RelayOptions = {}) {
   const hostWss = new WebSocketServer({ noServer: true, maxPayload: HOST_MAX_PAYLOAD });
 
   server.on("upgrade", (req, socket, head) => {
-    const pathname = new URL(req.url ?? "/", "http://x").pathname;
+    let pathname: string;
+    try {
+      pathname = new URL(req.url ?? "/", "http://x").pathname;
+    } catch {
+      // Unparseable target (e.g. "//["): drop it rather than throw out of the event handler.
+      socket.destroy();
+      return;
+    }
     if (pathname === "/host") {
       const origin = req.headers.origin;
       const allowed = isLoopback(req.socket.remoteAddress) && (!origin || hostOrigins.includes(origin));
