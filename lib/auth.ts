@@ -9,6 +9,13 @@ const SPOTIFY_SCOPES = [
   "user-top-read",
   "user-read-recently-played",
   "user-library-read",
+  // Jam mode and the in-browser player: control playback, read what's playing,
+  // and let this browser act as a Spotify Connect device (Web Playback SDK).
+  "user-modify-playback-state",
+  "user-read-currently-playing",
+  "user-read-email",
+  "user-read-private",
+  "streaming",
 ].join(" ");
 
 async function refreshAccessToken(token: Record<string, unknown>) {

@@ -30,6 +30,20 @@ export default async function Header() {
             Collaborative Mix
           </Link>
           <Link
+            href="/jam"
+            className="text-sm hover:opacity-80 transition-opacity"
+            style={{ color: "var(--text-subdued)" }}
+          >
+            Jam
+          </Link>
+          <Link
+            href="/history"
+            className="text-sm hover:opacity-80 transition-opacity"
+            style={{ color: "var(--text-subdued)" }}
+          >
+            History
+          </Link>
+          <Link
             href="/settings"
             className="text-sm hover:opacity-80 transition-opacity"
             style={{ color: "var(--text-subdued)" }}
