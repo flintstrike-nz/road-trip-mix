@@ -86,14 +86,34 @@ The Android app is a [Capacitor](https://capacitorjs.com) shell around the deplo
 | `JamRelay` | Starts the local-only hotspot and an embedded HTTP/WebSocket relay that serves the joiner page and carries jam messages. Runs in a foreground service so it keeps going while you're in Spotify. |
 | `SpotifyRemote` | [Spotify App Remote SDK](https://developer.spotify.com/documentation/android): controls the installed Spotify app and reports track changes instantly, so the rotation and play history don't wait for the next poll. |
 
-Build it (needs JDK 17+ and the Android SDK; set `ANDROID_HOME`):
+Build it yourself (needs JDK 21 and the Android SDK; set `ANDROID_HOME`):
 
 ```bash
-CAP_SERVER_URL=https://your-deployment.example npm run android:build
-# APK: android/app/build/outputs/apk/debug/app-debug.apk
+CAP_SERVER_URL=https://your-deployment.example npm run android:build     # debug APK
+# -> android/app/build/outputs/apk/debug/app-debug.apk
+CAP_SERVER_URL=https://your-deployment.example npm run android:release   # release APK (see "Releases" for signing)
+# -> android/app/build/outputs/apk/release/app-release.apk
 ```
 
 `npm run android:sync` builds the joiner page and runs `cap sync`; open the `android/` folder in Android Studio to run on a device. The first Gradle build downloads the Spotify App Remote AAR from Spotify's GitHub release into `android/app/libs/` (git-ignored). Run the native relay's tests with `cd android && ./gradlew :app:testDebugUnitTest`.
+
+### Releases
+
+Every merge to `main` runs the **Android release** workflow: it type-checks, lints and runs the tests (including the native relay's), builds a signed APK, and publishes it as a GitHub release `v0.1.<build number>`. The newest build is always at:
+
+> https://github.com/flintstrike-nz/road-trip-mix/releases/latest/download/road-trip-mix.apk
+
+On a phone, open that link, open the downloaded file, and allow installs from your browser if Android asks. Updating is the same: install the new APK over the old one. Pull requests get a CI run (checks plus an Android build) and a debug APK attached to the run for sideloading what a PR does.
+
+**One-time setup: a stable signing key.** Android only installs an update over an existing app when both are signed with the *same* key, and Spotify's App Remote identifies the app by that key's SHA-1 fingerprint, so CI must sign every release with one fixed key. Without it the workflow still publishes an APK but signs it with a throwaway debug key (and says so in the release notes), which can't update an earlier install.
+
+```bash
+scripts/android-keystore.sh --set-github-secrets flintstrike-nz/road-trip-mix
+```
+
+That creates the key in `~/.road-trip-mix/` (needs a JDK; **back that folder up**, since losing the key means everyone must uninstall and reinstall), prints its SHA-1 — register it in the Spotify dashboard's Android settings — and stores it as the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (using the GitHub CLI; without it, the script prints what to add by hand). Re-running it reuses the existing key. To sign a local build with the same key, build the *release* variant (the debug one always uses the debug key): `set -a; . ~/.road-trip-mix/rtm-signing.env; set +a; npm run android:release`.
+
+The APK wraps the production site (`https://road-trip-mix.vercel.app`); set the `CAP_SERVER_URL` repository variable to point releases somewhere else. `versionCode` is the workflow run number, so it rises with every build.
 
 Spotify dashboard setup for the app:
 

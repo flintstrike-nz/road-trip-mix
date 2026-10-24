@@ -1,0 +1,35 @@
+name: Set up Android build
+description: Node, JDK 21, the Android SDK and Gradle caching, shared by CI and the release workflow.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+
+    - name: Install npm dependencies
+      shell: bash
+      run: npm ci
+
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "21"
+
+    # GitHub's ubuntu runners ship with the Android SDK (ANDROID_HOME) and its command-line tools, so
+    # we use that rather than a setup action (android-actions/setup-android@v3 currently fails on these
+    # runners trying to install the retired "tools" package). Just make sure the SDK level we build
+    # against is present and the licences are accepted.
+    - name: Prepare the Android SDK
+      shell: bash
+      run: |
+        : "${ANDROID_HOME:?ANDROID_HOME is not set on this runner}"
+        SDKMANAGER="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)"
+        echo "Using $SDKMANAGER"
+        # `yes` gets SIGPIPE when sdkmanager stops reading, which pipefail would report as a failure.
+        yes | "$SDKMANAGER" --licenses > /dev/null || true
+        "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0"
+
+    - uses: gradle/actions/setup-gradle@v4
