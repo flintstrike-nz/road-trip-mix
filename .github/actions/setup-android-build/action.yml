@@ -1,0 +1,27 @@
+name: Set up Android build
+description: Node, JDK 21, the Android SDK and Gradle caching, shared by CI and the release workflow.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+
+    - name: Install npm dependencies
+      shell: bash
+      run: npm ci
+
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "21"
+
+    - uses: android-actions/setup-android@v3
+
+    - name: Install Android SDK packages
+      shell: bash
+      run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+
+    - uses: gradle/actions/setup-gradle@v4

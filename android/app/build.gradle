@@ -1,6 +1,19 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
+// Release builds (CI) pass these in; local builds fall back to 1 / "1.0".
+//   ./gradlew assembleRelease -PrtmVersionCode=12 -PrtmVersionName=0.1.12
+def rtmVersionCode = (findProperty('rtmVersionCode') ?: '1').toInteger()
+def rtmVersionName = findProperty('rtmVersionName') ?: '1.0'
+
+// Release signing comes from the environment so secrets never touch the command line or the repo.
+// Without RTM_KEYSTORE_PATH the release build is signed with the debug key instead: installable,
+// but with a different signature on every machine (so it can't update an earlier install, and
+// Spotify's App Remote won't recognise it). See README "Releases".
+// (CI sets unset secrets to an empty string, so blank counts as "not set".)
+def rtmKeystorePath = System.getenv('RTM_KEYSTORE_PATH')
+def rtmSigned = rtmKeystorePath != null && !rtmKeystorePath.trim().isEmpty()
+
 android {
     namespace = "com.roadtripmix.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -8,8 +21,8 @@ android {
         applicationId "com.roadtripmix.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode rtmVersionCode
+        versionName rtmVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -24,8 +37,19 @@ android {
     kotlinOptions {
         jvmTarget = '21'
     }
+    signingConfigs {
+        if (rtmSigned) {
+            release {
+                storeFile file(rtmKeystorePath)
+                storePassword System.getenv('RTM_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('RTM_KEY_ALIAS')
+                keyPassword System.getenv('RTM_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig rtmSigned ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

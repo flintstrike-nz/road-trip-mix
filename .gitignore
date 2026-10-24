@@ -20,6 +20,12 @@
 .DS_Store
 *.pem
 
+# android signing keys: never commit these
+*.jks
+*.keystore
+*.p12
+rtm-signing.env
+
 # debug
 npm-debug.log*
 yarn-debug.log*

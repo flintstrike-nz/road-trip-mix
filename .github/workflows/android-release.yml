@@ -1,0 +1,146 @@
+name: Android release
+
+# Every merge to main: test, build a signed APK, and publish it as a GitHub release.
+#   Latest APK, always:  https://github.com/<owner>/<repo>/releases/latest/download/road-trip-mix.apk
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release at a time and in merge order, so "latest" is always the newest merge.
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the release and its tag
+
+env:
+  # The Android app is a shell around the deployed site; override with the CAP_SERVER_URL repository variable.
+  CAP_SERVER_URL: ${{ vars.CAP_SERVER_URL || 'https://road-trip-mix.vercel.app' }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-android-build
+
+      # Don't ship a build that fails its own tests.
+      - name: Typecheck, lint, tests
+        run: |
+          npx tsc --noEmit
+          npm run lint
+          npm test
+
+      - name: Sync Capacitor project
+        run: npm run android:sync
+
+      - name: Native relay tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest
+
+      # versionCode has to rise with every build for Android to accept an update.
+      - name: Work out the version
+        run: |
+          BASE="$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')")"
+          echo "VERSION_NAME=${BASE}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Prepare the signing key
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf %s "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "keystore=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Release is not signed with a stable key::No ANDROID_KEYSTORE_BASE64 secret, so this APK uses a throwaway debug key: it can't update an earlier install and Spotify App Remote won't recognise it. Run scripts/android-keystore.sh --set-github-secrets OWNER/REPO once to fix this."
+          fi
+
+      - name: Build release APK
+        working-directory: android
+        env:
+          RTM_KEYSTORE_PATH: ${{ steps.signing.outputs.keystore }}
+          RTM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RTM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RTM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease -PrtmVersionCode="$VERSION_CODE" -PrtmVersionName="$VERSION_NAME"
+
+      - name: Verify the APK and read its certificate
+        id: apk
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --print-certs "$APK" | tee certs.txt
+          SHA1="$(grep -m1 'certificate SHA-1 digest' certs.txt | awk '{print $NF}' | tr a-f A-F | sed 's/../&:/g; s/:$//')"
+          mkdir -p dist
+          cp "$APK" "dist/road-trip-mix-${VERSION_NAME}.apk"
+          cp "$APK" dist/road-trip-mix.apk
+          echo "sha1=$SHA1" >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SHA1: ${{ steps.apk.outputs.sha1 }}
+        run: |
+          TAG="v${VERSION_NAME}"
+          CHANGES="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" --jq .body 2>/dev/null || true)"
+          {
+            echo "Android app **${VERSION_NAME}** (build ${VERSION_CODE}) from \`${GITHUB_SHA::7}\`."
+            echo
+            echo "**Install:** download \`road-trip-mix.apk\` below on your phone, open it, and allow installs from this source if Android asks."
+            echo "Wraps ${CAP_SERVER_URL}."
+            echo
+            echo "Signing certificate SHA-1 (register this in the Spotify dashboard, Android settings): \`${SHA1}\`"
+            if [ "$SIGNED" != "true" ]; then
+              echo
+              echo "> **Not signed with the project's release key.** This build uses a temporary debug key, so it cannot update an earlier install (uninstall first) and Spotify App Remote won't recognise it. The maintainer can fix this once with \`scripts/android-keystore.sh --set-github-secrets OWNER/REPO\`."
+            fi
+            echo
+            echo "$CHANGES"
+          } > notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${VERSION_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # A re-run of the same build: replace the files rather than fail.
+            gh release upload "$TAG" dist/*.apk --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/*.apk \
+              --target "$GITHUB_SHA" \
+              --title "Road Trip Mix ${VERSION_NAME}" \
+              --notes-file notes.md \
+              --latest
+          fi
+
+      - name: Summary
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SHA1: ${{ steps.apk.outputs.sha1 }}
+        run: |
+          {
+            echo "### Road Trip Mix ${VERSION_NAME}"
+            echo
+            echo "- Release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION_NAME}"
+            echo "- Always-latest download: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/road-trip-mix.apk"
+            echo "- Signed with the release key: ${SIGNED}"
+            echo "- Certificate SHA-1: \`${SHA1}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Kept for 30 days in case the release step needs to be redone by hand.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: road-trip-mix-${{ env.VERSION_NAME }}
+          path: dist/*.apk
+          retention-days: 30
