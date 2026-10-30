@@ -16,7 +16,7 @@ export default function PlaylistHeader({ playlist, trackCount }: Props) {
       </Link>
 
       <div className="flex gap-6 items-end mt-4">
-        {playlist.images[0] ? (
+        {playlist.images?.[0] ? (
           <Image
             src={playlist.images[0].url}
             alt={playlist.name}
@@ -41,7 +41,7 @@ export default function PlaylistHeader({ playlist, trackCount }: Props) {
             />
           )}
           <p className="playlist-owner text-sm font-semibold">
-            {playlist.owner.display_name}
+            {playlist.owner?.display_name ?? "Unknown"}
             <span className="playlist-owner-sub font-normal">
               {" "}· {playlist.tracks?.total ?? trackCount} songs
             </span>

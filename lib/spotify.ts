@@ -65,7 +65,7 @@ export type SimplifiedTrack = {
   id: string;
   name: string;
   artists: { name: string }[];
-  album: { name: string; images: { url: string }[] };
+  album: { name: string; images: { url: string }[] | null };
   duration_ms: number;
 };
 

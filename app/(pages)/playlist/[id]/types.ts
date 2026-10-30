@@ -13,7 +13,7 @@ export type EnrichedTrack = {
   name: string;
   duration_ms: number;
   artists: { id: string; name: string }[];
-  album: { name: string; images: { url: string }[] };
+  album: { name: string; images: { url: string }[] | null };
   genres: string[];
   audioFeatures: AudioFeatures | null;
 };
@@ -24,7 +24,7 @@ export type TrackItem = {
     name: string;
     duration_ms: number;
     artists: { id: string; name: string }[];
-    album: { name: string; images: { url: string }[] };
+    album: { name: string; images: { url: string }[] | null };
   } | null;
 };
 
@@ -32,7 +32,8 @@ export type PlaylistMeta = {
   id: string;
   name: string;
   description: string;
-  images: { url: string }[];
-  owner: { display_name: string };
+  // Spotify sends null (not []) for playlists without cover art, e.g. new or empty ones.
+  images: { url: string }[] | null;
+  owner: { display_name: string | null } | null;
   tracks: { total: number } | null;
 };
