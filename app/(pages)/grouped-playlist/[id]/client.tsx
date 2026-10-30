@@ -787,7 +787,7 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
                 const sourceColor = SEGMENT_COLORS[
                   (group?.playlistIds.indexOf(track.sourcePlaylistId) ?? 0) % SEGMENT_COLORS.length
                 ];
-                const artUrl = track.album.images[0]?.url;
+                const artUrl = track.album.images?.[0]?.url;
                 return (
                   <div key={track.id + i} className="sp-track-row">
                     <span className="sp-track-row__num">{i + 1}</span>

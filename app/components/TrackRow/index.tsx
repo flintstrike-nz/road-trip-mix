@@ -20,7 +20,7 @@ export default function TrackRow({ track, index }: Props) {
       <span className="track-number text-sm text-center">{index + 1}</span>
 
       <div className="flex items-center gap-3 min-w-0">
-        {track.album.images[0] && (
+        {track.album.images?.[0] && (
           <Image
             src={track.album.images[0].url}
             alt={track.album.name}
