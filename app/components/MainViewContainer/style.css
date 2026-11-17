@@ -353,3 +353,48 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* ── Touch devices ──
+   Phones and the Android app have no hover, so the controls above that only appear on hover would
+   never show: nothing would hint that playlists can be grouped and merged. Show them all the time
+   and make them big enough for a finger. */
+@media (hover: none) {
+  .playlist-item-wrapper--grid .group-btn {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .group-btn {
+    width: 40px;
+    height: 40px;
+    background-color: rgba(0, 0, 0, 0.75);
+    color: var(--text-base);
+  }
+
+  .playlist-item-wrapper--grid .group-btn-wrapper {
+    top: 6px;
+    right: 6px;
+  }
+
+  .group-header__btn {
+    opacity: 1;
+    width: 40px;
+    height: 40px;
+  }
+
+  .group-popover__item {
+    padding: 12px 14px;
+    font-size: 0.9375rem;
+  }
+}
+
+/* ── First-use hint ── */
+
+.group-hint {
+  margin: -8px 0 20px;
+  max-width: 560px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--text-subdued);
+}
+

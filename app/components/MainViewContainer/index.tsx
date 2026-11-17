@@ -393,6 +393,14 @@ export default function MainViewContainer() {
         </div>
       </div>
 
+      {/* Shown until the first group exists: grouping is how playlists get merged */}
+      {groups.length === 0 && playlists.length > 1 && (
+        <p className="group-hint">
+          Merge playlists: use the group button on a playlist to start a group, then create a grouped playlist
+          from it. Pick round-robin, shuffle or sort rules and push the result to Spotify.
+        </p>
+      )}
+
       {/* Creation modal */}
       {creatingGroupedIn && (
         <div className="create-gp-overlay" onClick={() => { setCreatingGroupedIn(null); setNewGpName(""); }}>
