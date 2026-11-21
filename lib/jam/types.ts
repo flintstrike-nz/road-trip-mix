@@ -87,6 +87,9 @@ export type PlayedEntry = {
   album: { id?: string; name: string };
   memberId: string | null;
   at: number;
+  // "Same song" match keys (see lib/dedupe), computed once when logged. Optional so a session
+  // saved by an older build still loads; they're derived on demand if missing.
+  keys?: string[];
 };
 
 // Albums and playlists a member can add to their queue in one go.

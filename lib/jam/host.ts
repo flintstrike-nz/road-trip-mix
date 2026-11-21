@@ -1,5 +1,6 @@
 import { parseClientMessage, type ClientMessage, type ErrorCode, type SearchKind, type ServerMessage } from "./protocol";
 import { checkAdd, playedEntry, type SkipReason } from "./rules";
+import { uniqueSongs } from "../dedupe";
 import { buildUpcoming } from "./schedule";
 import type {
   BaseEntry,
@@ -104,7 +105,7 @@ export function createJamState(opts: CreateJamOptions, deps: Pick<HostDeps, "now
     settings: {
       maxQueuePerMember: 25,
       allowDuplicates: false,
-      noRepeats: false,
+      noRepeats: true, // a song plays once per session unless the host switches this off
       maxPerArtist: { limit: null, scope: "session" },
       maxPerAlbum: { limit: null, scope: "session" },
       joinCode: randomJoinCode(),
@@ -119,7 +120,7 @@ export function createJamState(opts: CreateJamOptions, deps: Pick<HostDeps, "now
     lastRound: { [hostMemberId]: -1 },
     cursor: null,
     nowPlaying: null,
-    base: (opts.base ?? []).map((track, i): BaseEntry => ({ id: `base:${i}:${track.id}`, track })),
+    base: uniqueSongs(opts.base ?? []).map((track, i): BaseEntry => ({ id: `base:${i}:${track.id}`, track })),
     playlistLocked: opts.playlistLocked ?? 0,
     targetPlaylistId: opts.targetPlaylistId,
     groupedPlaylistId: opts.groupedPlaylistId,
@@ -501,7 +502,7 @@ export class JamHost {
   // Replace the filler list, e.g. after regenerating the grouped playlist.
   setBase(tracks: TrackMeta[]): void {
     this.mutate((st) => {
-      st.base = tracks.map((track, i): BaseEntry => ({ id: `base:${i}:${track.id}`, track }));
+      st.base = uniqueSongs(tracks).map((track, i): BaseEntry => ({ id: `base:${i}:${track.id}`, track }));
     });
   }
 

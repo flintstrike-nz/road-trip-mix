@@ -20,6 +20,20 @@ export type ScoredTrack = LibraryTrack & { score: number };
 // and across providers (an Apple Music copy and a Spotify copy of the same
 // song should collapse into one collaborative-mix entry).
 export function trackMatchKey(name: string, artists: string[]): string {
-  const norm = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, " ").trim();
-  return `${norm(name)}|${norm(artists[0] ?? "")}`;
+  return `${normalizeForMatch(name)}|${normalizeForMatch(artists[0] ?? "")}`;
+}
+
+// Combining accents (U+0300–U+036F), removed after decomposing so "Beyoncé" matches "Beyonce".
+const ACCENTS = new RegExp("[" + String.fromCharCode(0x300) + "-" + String.fromCharCode(0x36f) + "]", "g");
+
+// Lower-case, accent-free, apostrophes dropped ("Don't" and "Dont" are one song, not "don t"),
+// every other run of punctuation collapsed to a single space.
+function normalizeForMatch(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(ACCENTS, "")
+    .toLowerCase()
+    .replace(/['’`]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }

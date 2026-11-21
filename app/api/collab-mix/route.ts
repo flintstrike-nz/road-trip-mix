@@ -8,6 +8,7 @@ import { getAppleAccountFavorites, searchAppleCatalogTrack, createApplePlaylist 
 import { mergeFavorites, type MergedTrack } from "@/lib/collab-mix";
 import { generateAiMix } from "@/lib/openrouter";
 import { resolveOpenRouterKey } from "@/lib/openrouter-key";
+import { uniqueSongs, uniqueUris } from "@/lib/dedupe";
 
 type RequestBody = {
   accountIds?: string[]; // "primary" | spotify account id | `apple:<id>`
@@ -108,6 +109,9 @@ export async function POST(req: Request) {
     finalTracks = merged.slice(0, targetCount);
   }
 
+  // Whatever produced the list (merge or AI), a song appears once.
+  finalTracks = uniqueSongs(finalTracks);
+
   if (!body.createPlaylist) {
     return NextResponse.json({
       tracks: finalTracks,
@@ -137,7 +141,7 @@ export async function POST(req: Request) {
     const catalogIds = await Promise.all(
       finalTracks.map(async (t) => t.appleId ?? (await searchAppleCatalogTrack(t.name, t.artists[0] ?? "")))
     );
-    const resolvedIds = catalogIds.filter((id): id is string => !!id);
+    const resolvedIds = Array.from(new Set(catalogIds.filter((id): id is string => !!id)));
 
     let playlist;
     try {
@@ -165,11 +169,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Could not resolve your Spotify profile" }, { status: 502 });
   }
 
-  const uris = (
-    await Promise.all(
-      finalTracks.map(async (t) => t.spotifyUri ?? (await searchSpotifyTrack(session.accessToken!, t.name, t.artists[0] ?? "")))
-    )
-  ).filter((u): u is string => !!u);
+  // Two different entries can resolve to the same Spotify track (e.g. via search), so dedupe the URIs too.
+  const uris = uniqueUris(
+    (
+      await Promise.all(
+        finalTracks.map(async (t) => t.spotifyUri ?? (await searchSpotifyTrack(session.accessToken!, t.name, t.artists[0] ?? "")))
+      )
+    ).filter((u): u is string => !!u)
+  );
 
   const createRes = await fetch(`https://api.spotify.com/v1/users/${me.id}/playlists`, {
     method: "POST",

@@ -1,4 +1,6 @@
-import type { BaseEntry, JamState, ScheduledItem } from "./types";
+import { SongSet } from "../dedupe";
+import { playedKeys } from "./rules";
+import type { BaseEntry, JamState, PlayedEntry, ScheduledItem } from "./types";
 
 // Derives the upcoming play order from the per-member queues.
 //
@@ -22,6 +24,15 @@ export function firstRound(state: JamState, memberId: string): number {
   return Math.max(eligible, last);
 }
 
+// The play log only grows by replacement (a new array each time), so its normalised keys are
+// computed once per version of the log rather than on every schedule rebuild.
+// Match keys are stored on each play when it's logged, so this is just collecting strings.
+function collectPlayedKeys(played: PlayedEntry[]): Set<string> {
+  const keys = new Set<string>();
+  played.forEach((p) => playedKeys(p).forEach((k) => keys.add(k)));
+  return keys;
+}
+
 export function buildUpcoming(state: JamState): ScheduledItem[] {
   const slots: { round: number; pos: number; item: ScheduledItem }[] = [];
   state.memberOrder.forEach((memberId, pos) => {
@@ -37,12 +48,19 @@ export function buildUpcoming(state: JamState): ScheduledItem[] {
   });
   slots.sort((a, b) => a.round - b.round || a.pos - b.pos);
   const jam = slots.map((s) => s.item);
-  const filler: ScheduledItem[] = state.base.map((b: BaseEntry) => ({
-    entryId: b.id,
-    track: b.track,
-    memberId: null,
-    round: null,
-  }));
+  // A song never appears twice in the playlist: filler is skipped if the same song is already
+  // queued, playing, played this session, or listed earlier in the filler.
+  const seen = new SongSet(collectPlayedKeys(state.played));
+  if (state.nowPlaying) seen.add(state.nowPlaying.track);
+  jam.forEach((i) => seen.add(i.track));
+  const filler: ScheduledItem[] = state.base
+    .filter((b: BaseEntry) => seen.add(b.track))
+    .map((b: BaseEntry) => ({
+      entryId: b.id,
+      track: b.track,
+      memberId: null,
+      round: null,
+    }));
   return [...jam, ...filler];
 }
 
