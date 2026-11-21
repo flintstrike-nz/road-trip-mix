@@ -1,4 +1,4 @@
-import { trackMatchKey } from "../library-track";
+import { songKeys } from "../dedupe";
 import type { JamState, LimitRule, PlayedEntry, RuleSettings, TrackMeta } from "./types";
 
 // Host-enforced rules for what may be added to the jam. They're checked when a
@@ -28,8 +28,8 @@ export function checkAdd(state: JamState, track: TrackMeta): RuleResult {
   const s = state.settings;
 
   if (s.noRepeats) {
-    const key = trackMatchKey(track.name, track.artists.map((a) => a.name));
-    const again = state.played.some((p) => p.trackId === track.id || trackMatchKey(p.name, p.artists.map((a) => a.name)) === key);
+    const mine = songKeys(track);
+    const again = state.played.some((p) => playedKeys(p).some((k) => mine.includes(k)));
     if (again) return { ok: false, reason: "repeat", message: "That song already played this session." };
   }
 
@@ -67,8 +67,14 @@ export function checkAdd(state: JamState, track: TrackMeta): RuleResult {
 
 const scopeText = (scope: LimitRule["scope"]) => (scope === "session" ? "this session" : "in the queue");
 
+// Match keys for a logged play; older saved entries don't carry them.
+export function playedKeys(p: PlayedEntry): string[] {
+  return p.keys ?? songKeys({ id: p.trackId, name: p.name, artists: p.artists });
+}
+
 export function playedEntry(track: TrackMeta, memberId: string | null, at: number): PlayedEntry {
   return {
+    keys: songKeys(track),
     trackId: track.id,
     name: track.name,
     artists: track.artists.map((a) => ({ id: a.id, name: a.name })),

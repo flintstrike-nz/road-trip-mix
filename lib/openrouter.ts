@@ -84,7 +84,8 @@ export async function generateAiMix(
   }
 
   const validIds = new Set(candidates.map((c) => c.id));
-  const trackIds = (parsed.trackIds ?? []).filter((id) => validIds.has(id));
+  // Models sometimes repeat an id; a song must appear once, in the position it was first given.
+  const trackIds = Array.from(new Set((parsed.trackIds ?? []).filter((id) => validIds.has(id))));
 
   return {
     title: parsed.title || "AI Road Trip Mix",

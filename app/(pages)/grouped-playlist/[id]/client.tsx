@@ -15,6 +15,7 @@ import {
 import { getPlaylistTracksClient, getPlaylistMeta, type SimplifiedTrack } from "@/lib/spotify";
 import { getPlayback, playlistUri } from "@/lib/jam/spotify-backend";
 import { syncGeneratedLive } from "@/lib/spotify-sync";
+import { dedupeAcrossPlaylists, uniqueSongs, uniqueUris } from "@/lib/dedupe";
 import RulesModal from "@/app/components/RulesModal";
 import "../../playlist/[id]/style.css";
 
@@ -164,7 +165,8 @@ async function pushToSpotify(
     pid = (await createRes.json()).id as string;
   }
 
-  const uris = tracks.map((t) => `spotify:track:${t.id}`);
+  // Last guard: never write the same song to the playlist twice.
+  const uris = uniqueUris(uniqueSongs(tracks).map((t) => `spotify:track:${t.id}`));
 
   // Existing playlist: update it live. Songs already played or playing are left
   // alone and only the rest is rewritten, so this is safe mid-playback.
@@ -448,6 +450,7 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
   const [groupPlaylists, setGroupPlaylists] = useState<{ id: string; name: string; total: number }[]>([]);
   const [showRules, setShowRules] = useState(false);
   const [generated, setGenerated] = useState<TrackedTrack[] | null>(null);
+  const [duplicatesRemoved, setDuplicatesRemoved] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -456,7 +459,15 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(`road-trip-mix:generated:${id}`);
-      if (saved) setGenerated(JSON.parse(saved));
+      if (saved) {
+        // A list saved before duplicates were filtered out is cleaned on load.
+        const stored: TrackedTrack[] = JSON.parse(saved);
+        const clean = uniqueSongs(stored);
+        const previously = parseInt(localStorage.getItem(`road-trip-mix:generated-dupes:${id}`) ?? "0", 10) || 0;
+        setGenerated(clean);
+        setDuplicatesRemoved(previously + (stored.length - clean.length));
+        if (clean.length !== stored.length) localStorage.setItem(`road-trip-mix:generated:${id}`, JSON.stringify(clean));
+      }
     } catch {}
   }, [id]);
 
@@ -500,12 +511,16 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
     if (!playlist || !group || !session?.accessToken) return;
     setGenerating(true);
     try {
-      const rawByPlaylist = await Promise.all(
+      const fetched = await Promise.all(
         group.playlistIds.map(async (pid) => ({
           playlistId: pid,
           tracks: await getPlaylistTracksClient(session.accessToken!, pid),
         }))
       );
+
+      // A song that is in several source playlists (or twice in one) must appear once. Do this
+      // before sorting and rotation so it takes a single turn and isn't fetched for BPM twice.
+      const { playlists: rawByPlaylist, removed } = dedupeAcrossPlaylists(fetched);
 
       // Build feature map on the flat pre-round-robin pool so BPM sort can use it
       const needsAudio = playlist.rules.some(
@@ -548,8 +563,10 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
         else if (rule.type === "audio_feature" && featureMap) result = applyAudioFeature(result, rule, featureMap);
       }
       setGenerated(result);
+      setDuplicatesRemoved(removed);
       try {
         localStorage.setItem(`road-trip-mix:generated:${id}`, JSON.stringify(result));
+        localStorage.setItem(`road-trip-mix:generated-dupes:${id}`, String(removed));
       } catch {}
     } finally {
       setGenerating(false);
@@ -669,6 +686,11 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
                 {generated && (
                   <span className="playlist-owner-sub font-normal">
                     {" "}· {generated.length} tracks generated
+                    {duplicatesRemoved > 0 && (
+                      <>
+                        {" "}· {duplicatesRemoved} duplicate{duplicatesRemoved !== 1 ? "s" : ""} removed
+                      </>
+                    )}
                   </span>
                 )}
               </p>
@@ -700,7 +722,11 @@ export default function GroupedPlaylistClient({ id }: { id: string }) {
             <button
               onClick={() => {
               setGenerated(null);
-              try { localStorage.removeItem(`road-trip-mix:generated:${id}`); } catch {}
+              setDuplicatesRemoved(0);
+              try {
+                localStorage.removeItem(`road-trip-mix:generated:${id}`);
+                localStorage.removeItem(`road-trip-mix:generated-dupes:${id}`);
+              } catch {}
             }}
               className="px-5 py-2 rounded-full text-sm font-semibold border transition-colors"
               style={{ borderColor: "rgba(255,255,255,0.2)", color: "var(--text-subdued)" }}

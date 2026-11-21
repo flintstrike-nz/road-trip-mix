@@ -27,6 +27,14 @@ Apple Music connections need an [Apple Developer Program](https://developer.appl
 
 Unlike Spotify, there's no redirect URI to register: the app signs a developer token server-side and the browser (via MusicKit JS) handles user authorization directly against Apple.
 
+## One song, once
+
+A song never appears twice in a merged or collaborative playlist. Everywhere a playlist is built from several sources (grouped playlists, Collaborative Mix, and Jam mode) uses one definition of "the same song": the same Spotify track, **or** the same title and first artist once case, accents and punctuation are ignored (so the album, single and compilation copies of one song count as one).
+
+- **Grouped playlists** — a song shared by several source playlists is kept once, in the earliest playlist, so it takes a single round-robin turn. The header shows how many duplicates were removed, and lists saved before this change are cleaned when opened.
+- **Collaborative Mix** — duplicates are removed from the final tracklist (including AI-picked ones) before the playlist is created.
+- **Jam** — the filler from the base playlist skips anything already queued, playing or played this session. "Each song can only play once this session" is now on by default for new jams (the host can switch it off); jams saved earlier keep their old setting.
+
 ## Collaborative mixes
 
 The **Collaborative Mix** page (linked from the header once signed in) lets you connect multiple Spotify and Apple Music accounts — e.g. everyone going on the road trip — and automatically builds a shared playlist from each person's current favorites (recently played, top tracks/heavy rotation, and recently added library tracks). A track favorited on both Spotify and Apple Music by different people is recognized as the same song and merged. Optionally, enable AI curation to have an LLM (via OpenRouter) pick and order the final tracklist for a requested vibe. The playlist can be created on either Spotify or Apple Music; tracks sourced from the other platform are best-effort matched against the destination's catalog by title and artist, and any that can't be matched are skipped and reported.

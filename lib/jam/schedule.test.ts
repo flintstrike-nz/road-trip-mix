@@ -86,3 +86,32 @@ describe("round-robin schedule", () => {
     expect(order()).toEqual(["Song h1"]);
   });
 });
+
+describe("a song never appears twice in the playlist", () => {
+  const reissue = (n: number, like: ReturnType<typeof track>) => ({ ...track(n), name: like.name, artists: like.artists });
+
+  it("skips filler that is already queued by a member", () => {
+    const { host } = makeHost({ base: [track("f1"), track("f2")] });
+    host.addTrack("host", track("f1"));
+    expect(host.upcoming().map((u) => u.track.name)).toEqual(["Song f1", "Song f2"]);
+    expect(host.upcoming().filter((u) => u.memberId === null)).toHaveLength(1);
+  });
+
+  it("skips filler that is playing or has already played", () => {
+    const { host } = makeHost({ base: [track("a"), track("b"), track("c")] });
+    host.trackStarted(track("a"));
+    host.trackStarted(track("b"));
+    expect(host.upcoming().map((u) => u.track.name)).toEqual(["Song c"]);
+  });
+
+  it("drops repeats inside the base playlist, including the same song on another release", () => {
+    const { host } = makeHost({ base: [track("x"), { ...track("y"), name: "Song x", artists: track("x").artists }, track("z")] });
+    expect(host.upcoming().map((u) => u.track.name)).toEqual(["Song x", "Song z"]);
+  });
+
+  it("de-duplicates when the base playlist is replaced later", () => {
+    const { host } = makeHost();
+    host.setBase([track("p"), track("p"), reissue(7, track("p"))]);
+    expect(host.getState().base).toHaveLength(1);
+  });
+});

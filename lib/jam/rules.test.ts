@@ -1,17 +1,31 @@
 import { describe, expect, it } from "vitest";
+import { JamHost } from "./host";
 import { describeAdd, describeRules } from "./rules";
 import { makeHost, track, trackBy } from "./test-utils";
 
 describe("no-repeat rule", () => {
-  it("refuses a song that already played this session, but only when enabled", () => {
+  it("is on by default: a song that already played this session can't be added again", () => {
     const { host } = makeHost();
+    expect(host.getState().settings.noRepeats).toBe(true);
     host.trackStarted(track(1));
-    expect(host.addTrack("host", track(1)).ok).toBe(true); // rule off
-    host.removeEntry("host", host.getState().queues.host[0].id);
-
-    host.setSettings("host", { noRepeats: true });
     expect(host.addTrack("host", track(1))).toMatchObject({ ok: false, code: "rule-repeat" });
     expect(host.addTrack("host", track(2)).ok).toBe(true);
+  });
+
+  it("the host can switch it off to allow replays", () => {
+    const { host } = makeHost();
+    host.setSettings("host", { noRepeats: false });
+    host.trackStarted(track(1));
+    expect(host.addTrack("host", track(1)).ok).toBe(true);
+  });
+
+  it("sessions saved before the default changed keep their old setting", () => {
+    const { state, deps } = makeHost();
+    // an old save has no noRepeats at all: it must load as "off", not silently turn on
+    const oldSettings: Partial<typeof state.settings> = { ...state.settings };
+    delete oldSettings.noRepeats;
+    const restored = new JamHost({ ...state, settings: oldSettings as typeof state.settings }, deps);
+    expect(restored.getState().settings.noRepeats).toBe(false);
   });
 
   it("also catches the same song on a different release (same title and artist)", () => {
@@ -121,8 +135,8 @@ describe("host-only rule settings", () => {
   it("rejects changes from anyone but the host and clamps silly values", () => {
     const { host, join } = makeHost();
     const ann = join("c1", "ann-dev", "Ann");
-    expect(host.setSettings(ann, { noRepeats: true })).toMatchObject({ ok: false, code: "forbidden" });
-    expect(host.getState().settings.noRepeats).toBe(false);
+    expect(host.setSettings(ann, { noRepeats: false })).toMatchObject({ ok: false, code: "forbidden" });
+    expect(host.getState().settings.noRepeats).toBe(true);
     host.setSettings("host", { maxPerArtist: { limit: 9999, scope: "queue" }, maxQueuePerMember: -5 });
     expect(host.getState().settings.maxPerArtist.limit).toBe(50);
     expect(host.getState().settings.maxQueuePerMember).toBe(1);
@@ -142,6 +156,8 @@ describe("host-only rule settings", () => {
 describe("rule descriptions", () => {
   it("lists only the rules that are on", () => {
     const { host } = makeHost();
+    expect(describeRules(host.publicState().settings)).toEqual(["Each song can only play once this session", "Up to 25 songs in your queue"]);
+    host.setSettings("host", { noRepeats: false });
     expect(describeRules(host.publicState().settings)).toEqual(["A song can't be queued twice at the same time", "Up to 25 songs in your queue"]);
     host.setSettings("host", { noRepeats: true, maxPerArtist: { limit: 2, scope: "queue" } });
     expect(describeRules(host.publicState().settings)).toEqual([
