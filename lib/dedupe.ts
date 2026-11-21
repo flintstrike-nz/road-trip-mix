@@ -13,7 +13,11 @@ type Named = { name: string; artists: ({ name: string } | string)[] };
 const artistName = (a: { name: string } | string | undefined) => (typeof a === "string" ? a : a?.name ?? "");
 
 export function songKeys(t: Named & { id?: string }): string[] {
-  const keys = [`name:${trackMatchKey(t.name, [artistName(t.artists[0])])}`];
+  const keys: string[] = [];
+  const byName = trackMatchKey(t.name, [artistName(t.artists[0])]);
+  // A title that normalises to nothing (e.g. only symbols) says nothing about the song, so it
+  // must not match every other such song: those fall back to the Spotify id alone.
+  if (byName.split("|")[0]) keys.push(`name:${byName}`);
   if (t.id) keys.push(`id:${t.id}`);
   return keys;
 }

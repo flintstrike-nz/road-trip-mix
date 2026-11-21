@@ -26,14 +26,17 @@ export function trackMatchKey(name: string, artists: string[]): string {
 // Combining accents (U+0300–U+036F), removed after decomposing so "Beyoncé" matches "Beyonce".
 const ACCENTS = new RegExp("[" + String.fromCharCode(0x300) + "-" + String.fromCharCode(0x36f) + "]", "g");
 
-// Lower-case, accent-free, apostrophes dropped ("Don't" and "Dont" are one song, not "don t"),
-// every other run of punctuation collapsed to a single space.
+// Anything that is not a letter or number in any script (built at runtime: the TS target predates the u flag).
+const NON_WORD = new RegExp("[^\\p{L}\\p{N}]+", "gu");
+
+// Lower-case, accent-free (Latin accents only; other scripts are kept as-is), apostrophes dropped ("Don't" and "Dont" are one song, not "don t"),
+// every other run of non-letter/number characters collapsed to a single space.
 function normalizeForMatch(s: string): string {
   return s
     .normalize("NFD")
     .replace(ACCENTS, "")
     .toLowerCase()
     .replace(/['’`]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(NON_WORD, " ")
     .trim();
 }

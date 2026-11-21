@@ -93,3 +93,22 @@ describe("uniqueUris", () => {
     expect(uniqueUris(["a", "b", "a", "c", "b"])).toEqual(["a", "b", "c"]);
   });
 });
+
+describe("non-Latin and symbol-only titles", () => {
+  const t = (id: string, name: string, artist: string) => ({ id, name, artists: [{ name: artist }] });
+
+  it("keeps different songs written in other scripts apart", () => {
+    const songs = [t("1", "夜に駆ける", "YOASOBI"), t("2", "群青", "YOASOBI"), t("3", "Катюша", "Ансамбль"), t("4", "Калинка", "Ансамбль")];
+    expect(uniqueSongs(songs)).toHaveLength(4);
+  });
+
+  it("still merges the same non-Latin song on different releases", () => {
+    expect(uniqueSongs([t("1", "夜に駆ける", "YOASOBI"), t("2", "夜に駆ける", "YOASOBI")])).toHaveLength(1);
+  });
+
+  it("never treats symbol-only titles as the same song just because they look empty", () => {
+    const songs = [t("1", "???", "A"), t("2", "!!!", "A"), t("3", "...", "A")];
+    expect(uniqueSongs(songs)).toHaveLength(3);
+    expect(uniqueSongs([...songs, t("1", "???", "A")])).toHaveLength(3); // same id still collapses
+  });
+});
